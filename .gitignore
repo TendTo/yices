@@ -18,3 +18,4 @@
 .directory
 .settings/*
 tests/api/*.log
+/.idea/
