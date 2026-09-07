@@ -183,6 +183,34 @@ CPPFLAGS=$save_cppflags
 LIBS=$save_libs
 ])
 
+dnl
+dnl Options for qsoptex and the libpoly library
+dnl -----------------------------------------
+dnl --enable-qsoptex: add support for QSopt_ex
+dnl
+use_qsoptex="no"
+AC_ARG_ENABLE([qsoptex],
+   [AS_HELP_STRING([--enable-qsoptex],[Enable support for QSopt_ex. This requires the QSopt_ex library.])],
+   [if test "$enableval" = yes ; then
+      use_qsoptex="yes"
+      AC_MSG_NOTICE([Enabling support for QSopt_ex])
+    fi],
+   [])
+
+dnl
+dnl Options for SoPlex and the libpoly library
+dnl -----------------------------------------
+dnl --enable-soplex: add support for SoPlex
+dnl
+use_soplex="no"
+AC_ARG_ENABLE([soplex],
+   [AS_HELP_STRING([--enable-soplex],[Enable support for SoPlex. This requires the SoPlex library.])],
+   [if test "$enableval" = yes ; then
+      use_soplex="yes"
+      AC_MSG_NOTICE([Enabling support for SoPlex])
+    fi],
+   [])
+
 
 
 dnl
@@ -885,6 +913,23 @@ fi
 # We need -lm (for fclassify)
 #
 AC_CHECK_LIB([m], [main], [], [])
+
+#
+# EXTERNAL SIMPLEX SUPPORT
+# -------------
+if test $use_qsoptex = yes ; then
+    AC_MSG_NOTICE([Enabling support for QSopt_ex])
+    LIBS="$LIBS -lqsopt_ex -lz -lbz2 -lm"
+else
+    AC_MSG_NOTICE([Disabling support for QSopt_ex])
+fi
+if test $use_soplex = yes ; then
+    AC_MSG_NOTICE([Enabling support for SoPlex])
+    # LIBS="$LIBS -lsoplex -lz -lbz2 -lm"
+else
+    AC_MSG_NOTICE([Disabling support for SoPlex])
+fi
+
 
 #
 # MCSAT SUPPORT
