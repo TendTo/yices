@@ -26,6 +26,7 @@
 
 #include "io/tracer.h"
 #include "solvers/egraph/theory_explanations.h"
+#include "solvers/simplex/external_simplex.h"
 #include "solvers/simplex/integrality_constraints.h"
 #include "solvers/simplex/simplex.h"
 #include "terms/rational_hash_maps.h"
@@ -4189,7 +4190,6 @@ static void conflict_set_for_decrease(simplex_solver_t *solver, row_t *row, thva
   enqueue_cnstr_index(v, arith_var_upper_index(vtbl, x), &solver->bstack);
 }
 
-
 /*
  * Check for feasibility:
  * - search for an assignment that satisfies all the bounds
@@ -4250,6 +4250,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   }
 
   for (;;) {
+    simplex_check_feasibility_external(solver);
     // check interrupt at every iteration
     if (solver->interrupted) {
       feasible = false;
