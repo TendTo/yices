@@ -1137,6 +1137,13 @@ static void show_simplex_stats(simplex_stats_t *stat) {
   printf(" rows in final tableau   : %"PRIu32"\n", stat->num_end_rows);
   printf(" calls to make_feasible  : %"PRIu32"\n", stat->num_make_feasible);
   printf(" pivots                  : %"PRIu32"\n", stat->num_pivots);
+  printf(" max delta               : %.2f\n", stat->max_delta);
+  printf(" max precision           : %"PRIu32"\n", stat->max_precision);
+  printf(" delta calls             : %"PRIu32"\n", stat->delta_calls);
+  printf(" external solver calls   : %"PRIu32"\n", stat->external_calls);
+  printf(" external calls success  : %"PRIu32"\n", stat->external_success);
+  printf(" external calls failure  : %"PRIu32"\n", stat->external_failure);
+  printf(" adjustment pivots       : %"PRIu32"\n", stat->adjustment_pivots);
   printf(" bland-rule activations  : %"PRIu32"\n", stat->num_blands);
   printf(" simple lemmas           : %"PRIu32"\n", stat->num_binary_lemmas);
   //  printf(" propagation lemmas      : %"PRIu32"\n", stat->num_prop_lemmas);  (it's always zero)

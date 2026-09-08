@@ -642,6 +642,13 @@ static void show_simplex_stats(simplex_stats_t *stat) {
   fprintf(stderr, " rows in final tableau   : %"PRIu32"\n", stat->num_end_rows);
   fprintf(stderr, " calls to make_feasible  : %"PRIu32"\n", stat->num_make_feasible);
   fprintf(stderr, " pivots                  : %"PRIu32"\n", stat->num_pivots);
+  fprintf(stderr, " max delta               : %.2f\n", stat->max_delta);
+  fprintf(stderr, " max precision           : %"PRIu32"\n", stat->max_precision);
+  fprintf(stderr, " delta calls             : %"PRIu32"\n", stat->delta_calls);
+  fprintf(stderr, " external solver calls   : %"PRIu32"\n", stat->external_calls);
+  fprintf(stderr, " external calls success  : %"PRIu32"\n", stat->external_success);
+  fprintf(stderr, " external calls failure  : %"PRIu32"\n", stat->external_failure);
+  fprintf(stderr, " adjustment pivots       : %"PRIu32"\n", stat->adjustment_pivots);
   fprintf(stderr, " bland-rule activations  : %"PRIu32"\n", stat->num_blands);
   fprintf(stderr, " simple lemmas           : %"PRIu32"\n", stat->num_binary_lemmas);
   fprintf(stderr, " prop. to core           : %"PRIu32"\n", stat->num_props);

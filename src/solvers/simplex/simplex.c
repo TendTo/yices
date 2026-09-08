@@ -628,6 +628,14 @@ static void init_simplex_statistics(simplex_stats_t *stat) {
   stat->num_blands = 0;
   stat->num_conflicts = 0;
 
+  stat->max_delta = 0.0;
+  stat->max_precision = 0;
+  stat->delta_calls = 0;
+  stat->external_calls = 0;
+  stat->external_success = 0;
+  stat->external_failure = 0;
+  stat->adjustment_pivots = 0;
+
   stat->num_make_intfeasible = 0;
   stat->num_bound_conflicts = 0;
   stat->num_bound_recheck_conflicts = 0;

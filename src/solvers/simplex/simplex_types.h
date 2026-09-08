@@ -639,6 +639,15 @@ typedef struct simplex_stats_s {
   uint32_t num_blands;         // number of activations of bland's rule
   uint32_t num_conflicts;
 
+  // dlinear statistics
+  double max_delta;
+  uint32_t max_precision;
+  uint32_t delta_calls;
+  uint32_t external_calls;
+  uint32_t external_success;
+  uint32_t external_failure;
+  uint32_t adjustment_pivots;
+
   // stats on integer arithmetic solver
   uint32_t num_make_intfeasible;        // calls to make_integer_feasible
   uint32_t num_bound_conflicts;         // unsat by ordinary bound strengthening
