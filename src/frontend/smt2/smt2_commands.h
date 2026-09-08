@@ -192,6 +192,12 @@ typedef enum smt2_opcodes {
 
 #define NUM_SMT2_OPCODES (SMT2_MK_DIVISIBLE+1)
 
+typedef enum {
+  EXTERNAL_SOLVER_AUTO,
+  EXTERNAL_SOLVER_QSOPTEX,
+  EXTERNAL_SOLVER_SOPLEX,
+} external_solver_t;
+
 
 
 /*
@@ -396,6 +402,10 @@ typedef struct smt2_globals_s {
   uint32_t random_seed;           // default = 0
   uint32_t verbosity;             // default = 0
 
+  external_solver_t external_solver; // default = EXTERNAL_SOLVER_AUTO
+  bool strict_mode;                  // default = false
+  double delta;                      // default = -1.0
+
   // yices options
   ctx_param_t ctx_parameters;  // preprocessing options
   param_t parameters;          // search options
@@ -513,6 +523,10 @@ extern void smt2_force_dpllt(void);
  * - must not be called before init_smt2
  */
 extern void smt2_set_verbosity(uint32_t k);
+
+extern void smt2_set_external_solver(const char solver[]);
+extern void smt2_set_strict_mode(bool is_strict);
+extern void smt2_set_delta(double delta);
 
 /*
  * Enable a trace tag for tracing.

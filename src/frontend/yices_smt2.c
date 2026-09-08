@@ -147,6 +147,10 @@ static double ef_ematch_term_alpha;
 static int32_t ef_ematch_cnstr_mode;
 static int32_t ef_ematch_term_mode;
 
+static char* external_solver;
+static bool is_strict;
+static double delta;
+
 static uint32_t nthreads;
 
 /****************************
@@ -199,6 +203,9 @@ typedef enum optid {
   ematch_term_alpha_opt,            // set ematch term learner learning rate
   ematch_cnstr_mode_opt,            // set cnstr mode in ematching
   ematch_term_mode_opt,             // set term mode in ematching
+  external_solver_opt,              // use an external solver
+  strict_opt,                       // enable strict mode
+  delta_opt,                        // set delta for strict mode
   nthreads_opt,                     // number of threads
 } optid_t;
 
@@ -253,7 +260,10 @@ static option_desc_t options[NUM_OPTIONS] = {
   { "ematch-term-alpha", '\0', MANDATORY_FLOAT, ematch_term_alpha_opt },
   { "ematch-cnstr-mode", '\0', MANDATORY_STRING, ematch_cnstr_mode_opt },
   { "ematch-term-mode", '\0', MANDATORY_STRING, ematch_term_mode_opt },
-  { "nthreads", 'n', MANDATORY_INT, nthreads_opt }
+  {"external-solver", '\0', MANDATORY_STRING, external_solver_opt},
+  {"strict", '\0', FLAG_OPTION, strict_opt},
+  {"delta", '\0', MANDATORY_FLOAT, delta_opt},
+  { "nthreads", 'n', MANDATORY_INT, nthreads_opt },
 };
 
 
@@ -443,6 +453,10 @@ static void parse_command_line(int argc, char *argv[]) {
   ef_ematch_cnstr_mode = -1;
   ef_ematch_term_mode = -1;
 
+  external_solver = "";
+  is_strict = false;
+  delta = -1.0;
+
   nthreads = 0;
 
   init_cmdline_parser(&parser, options, NUM_OPTIONS, argv, argc);
@@ -500,6 +514,22 @@ static void parse_command_line(int argc, char *argv[]) {
           goto bad_usage;
         }
         timeout = v;
+        break;
+
+      case external_solver_opt:
+        external_solver = elem.s_value;
+        break;
+
+      case strict_opt:
+        is_strict = true;
+        break;
+
+      case delta_opt:
+        delta = elem.d_value;
+        if (delta <= 0.0) {
+          fprintf(stderr, "%s: the delta must be positive\n", parser.command_name);
+          goto bad_usage;
+        }
         break;
 
       case nthreads_opt:
@@ -1199,6 +1229,15 @@ int main(int argc, char *argv[]) {
     for (i = 0; i < trace_tags.size; ++ i) {
       smt2_enable_trace_tag(trace_tags.data[i]);
     }
+  }
+  if (external_solver != NULL) {
+    smt2_set_external_solver(external_solver);
+  }
+  if (delta != -1.0) {
+    smt2_set_delta(delta);
+  }
+  if (is_strict) {
+    smt2_set_strict_mode(true);
   }
 
   setup_options();

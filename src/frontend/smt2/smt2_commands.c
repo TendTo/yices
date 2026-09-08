@@ -2345,6 +2345,28 @@ static void set_unsat_model_interpolants_option(smt2_globals_t *g, const char *n
   }
 }
 
+void smt2_set_external_solver(const char solver[]) {
+  if (strcmp(solver, "soplex") == 0) {
+    __smt2_globals.external_solver = EXTERNAL_SOLVER_SOPLEX;
+  } else if (strcmp(solver, "qsoptex") == 0) {
+    __smt2_globals.external_solver = EXTERNAL_SOLVER_QSOPTEX;
+  } else {
+    print_error("option :external-solver must be either \"z3\" or \"cvc5\"");
+  }
+}
+
+void smt2_set_strict_mode(const bool is_strict) {
+  __smt2_globals.strict_mode = is_strict;
+}
+
+void smt2_set_delta(const double delta) {
+  if (delta <= 0.0) {
+    print_error("option :delta must be positive");
+  } else {
+    __smt2_globals.delta = delta;
+  }
+}
+
 
 /*
  * OUTPUT OF INFO AND OPTIONS
@@ -2719,7 +2741,7 @@ static void timeout_handler(void *data) {
   /* In the multi-threaded case there are multiple copies of the
      global data. */
 #endif /* THREAD_SAFE */
-  
+
   g = data;
   if (g->efmode && g->ef_client.efsolver != NULL && g->ef_client.efsolver->status == EF_STATUS_SEARCHING) {
     ef_solver_stop_search(g->ef_client.efsolver);
@@ -4747,6 +4769,9 @@ static void init_smt2_globals(smt2_globals_t *g) {
   g->produce_assignments = false;
   g->random_seed = 0;  // 0 means any seed is good
   g->verbosity = 0;
+  g->external_solver = EXTERNAL_SOLVER_AUTO;
+  g->strict_mode = false;
+  g->delta = -1.0;
   init_ctx_params(&g->ctx_parameters);
   init_params_to_defaults(&g->parameters);
   g->dump_models = false;
@@ -6851,7 +6876,7 @@ static void check_delayed_assertions_mt(smt2_globals_t *g) {
   assert(n > 0);
 
   verbose = g->verbosity > 0;
-    
+
   smt2_globals_t *garray =  (smt2_globals_t *) safe_malloc(n * sizeof(smt2_globals_t));
   for(i = 0; i < n; i++) {
     garray[i] = __smt2_globals;  // just copy them for now.
