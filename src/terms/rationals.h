@@ -184,6 +184,7 @@ extern void q_set64(rational_t *r, int64_t num);
 extern void q_set_double(rational_t *r, double d);
 
 extern void q_set_mpq(rational_t *r, const mpq_t q);
+extern void q_set_mpq_prenormalize(rational_t *r, const mpq_t q);
 extern void q_set_mpz(rational_t *r, const mpz_t z);
 extern void q_set(rational_t *r1, const rational_t *r2);
 extern void q_set_neg(rational_t *r1, const rational_t *r2);

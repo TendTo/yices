@@ -491,6 +491,30 @@ void q_set_mpq(rational_t *r, const mpq_t q) {
   q_normalize(r);
 }
 
+void q_set_mpq_prenormalize(rational_t *r, const mpq_t q) {
+  unsigned long den;
+  long num;
+  mpq_ptr qt;
+
+  // If the numerator and denominator of q fit in 32 bits,
+  // we can store it as a pair of integers
+  if (mpz_fits_ulong_p(mpq_denref(q)) && mpz_fits_slong_p(mpq_numref(q))) {
+    num = mpz_get_si(mpq_numref(q));
+    den = mpz_get_ui(mpq_denref(q));
+    if (MIN_NUMERATOR <= num && num <= MAX_NUMERATOR && den <= MAX_DENOMINATOR) {
+      set_rat32(r, (int32_t) num, (uint32_t) den);
+      assert(is_rat32(r));
+      return;
+    }
+  }
+
+  // Otherwise, we need to allocate a new mpq number and copy q into it
+  q_prepare(r);
+  qt = get_gmp(r);
+  mpq_set(qt, q);
+  assert(is_ratgmp(r));
+}
+
 /*
  * Sets a rational to a value from a double
  */
