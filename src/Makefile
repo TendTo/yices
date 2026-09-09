@@ -209,6 +209,7 @@ core_src_c := \
 	solvers/simplex/arith_atomtable.c \
 	solvers/simplex/arith_vartable.c \
 	solvers/simplex/diophantine_systems.c \
+	solvers/simplex/external_qsoptex.c \
 	solvers/simplex/external_simplex.c \
 	solvers/simplex/gomory_cuts.c \
 	solvers/simplex/integrality_constraints.c \
