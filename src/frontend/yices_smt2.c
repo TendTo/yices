@@ -174,7 +174,7 @@ typedef enum optid {
   mcsat_opt,               // enable mcsat
   dpllt_opt,               // force CDCL(T)
   mcsat_rand_dec_freq_opt, // random decision frequency when making a decision in mcsat
-  mcsat_rand_dec_seed_opt, // seed for random decisions 
+  mcsat_rand_dec_seed_opt, // seed for random decisions
   mcsat_na_mgcd_opt,      // use the mgcd instead psc in projection
   mcsat_na_nlsat_opt,     // use the nlsat projection instead of brown single-cell
   mcsat_na_bound_opt,     // search by increasing bound
@@ -204,8 +204,8 @@ typedef enum optid {
   ematch_cnstr_mode_opt,            // set cnstr mode in ematching
   ematch_term_mode_opt,             // set term mode in ematching
   external_solver_opt,              // use an external solver
-  strict_opt,                       // enable strict mode
-  delta_opt,                        // set delta for strict mode
+  epsilon_opt,                      // enable epsilon mode
+  delta_opt,                        // set delta for delta-complete mode
   nthreads_opt,                     // number of threads
 } optid_t;
 
@@ -261,7 +261,7 @@ static option_desc_t options[NUM_OPTIONS] = {
   { "ematch-cnstr-mode", '\0', MANDATORY_STRING, ematch_cnstr_mode_opt },
   { "ematch-term-mode", '\0', MANDATORY_STRING, ematch_term_mode_opt },
   {"external-solver", '\0', MANDATORY_STRING, external_solver_opt},
-  {"strict", '\0', FLAG_OPTION, strict_opt},
+  {"epsilon", '\0', FLAG_OPTION, epsilon_opt},
   {"delta", '\0', MANDATORY_FLOAT, delta_opt},
   { "nthreads", 'n', MANDATORY_INT, nthreads_opt },
 };
@@ -520,7 +520,7 @@ static void parse_command_line(int argc, char *argv[]) {
         external_solver = elem.s_value;
         break;
 
-      case strict_opt:
+      case epsilon_opt:
         is_strict = true;
         break;
 
@@ -542,7 +542,7 @@ static void parse_command_line(int argc, char *argv[]) {
         }
         nthreads = v;
         break;
-	
+
       case incremental_opt:
         incremental = true;
         break;
@@ -1237,7 +1237,7 @@ int main(int argc, char *argv[]) {
     smt2_set_delta(delta);
   }
   if (is_strict) {
-    smt2_set_strict_mode(true);
+    smt2_set_epsilon_mode(true);
   }
 
   setup_options();

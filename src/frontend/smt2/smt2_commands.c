@@ -2355,8 +2355,8 @@ void smt2_set_external_solver(const char solver[]) {
   }
 }
 
-void smt2_set_strict_mode(const bool is_strict) {
-  __smt2_globals.strict_mode = is_strict;
+void smt2_set_epsilon_mode(const bool enable_epsilon_mode) {
+  __smt2_globals.epsilon_mode = enable_epsilon_mode;
 }
 
 void smt2_set_delta(const double delta) {
@@ -4770,7 +4770,7 @@ static void init_smt2_globals(smt2_globals_t *g) {
   g->random_seed = 0;  // 0 means any seed is good
   g->verbosity = 0;
   g->external_solver = EXTERNAL_SOLVER_AUTO;
-  g->strict_mode = false;
+  g->epsilon_mode = false;
   g->delta = -1.0;
   init_ctx_params(&g->ctx_parameters);
   init_params_to_defaults(&g->parameters);

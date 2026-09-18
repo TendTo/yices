@@ -403,7 +403,7 @@ typedef struct smt2_globals_s {
   uint32_t verbosity;             // default = 0
 
   external_solver_t external_solver; // default = EXTERNAL_SOLVER_AUTO
-  bool strict_mode;                  // default = false
+  bool epsilon_mode;                 // default = false
   double delta;                      // default = -1.0
 
   // yices options
@@ -525,7 +525,7 @@ extern void smt2_force_dpllt(void);
 extern void smt2_set_verbosity(uint32_t k);
 
 extern void smt2_set_external_solver(const char solver[]);
-extern void smt2_set_strict_mode(bool is_strict);
+extern void smt2_set_epsilon_mode(bool enable_epsilon_mode);
 extern void smt2_set_delta(double delta);
 
 /*
