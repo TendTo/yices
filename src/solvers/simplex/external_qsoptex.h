@@ -19,18 +19,22 @@ typedef char VarStatus;
 typedef int SolverStatus;
 
 typedef struct {
-  mpq_QSprob prob;
-  SolverStatus d_status;
+  mpq_QSprob prob;       ///< The QSopt_ex LP problem
+  SolverStatus d_status; ///< Status of the LP problem after solving
 
-  // DenseMap<std::size_t> d_colIndices;
-  // std::vector<ArithVar> d_rowToArithVar;
-  // std::vector<ArithVar> d_colToArithVar;
+  thvar_t *col_to_var; ///< Map from column index in the LP to theory var
+  thvar_t *row_to_var; ///< Map from row index in the LP to theory var
 
-  mpq_t *rhs;
-  mpq_t *range;
-  char *sense;
-  rational_t x;
-  QSbasis basis;
+  int32_t *var_to_col; ///< Map from theory var to column index in the LP
+  int32_t *var_to_row; ///< Map from theory var to row index in the LP
+
+  int32_t n_aux; ///< Number of auxiliary variables
+
+  mpq_t *rhs;    ///< Right-hand side of the constraints
+  mpq_t *range;  ///< Range of the constraints
+  char *sense;   ///< Sense of the constraints ('E', 'G', 'L', or 'R')
+  rational_t x;  ///< Temporary rational for storing the solution
+  QSbasis basis; ///< Basis information for the solution
 } qsx_t;
 
 void qsx_solve(simplex_solver_t *solver, external_solution_t *solution);

@@ -67,8 +67,8 @@ bool is_strict_var_zero(mpq_t x);
  * If that happens, the caller is responsible for clearing it after use.
  * @return a pointer to the bound
  */
-mpq_ptr get_bound(bound_type_t bound, mpq_ptr ninf, mpq_ptr inf,
-                  bool *used_temp, mpq_t *temp);
+void get_bound(const simplex_solver_t *solver, thvar_t v, bool is_lower_bound,
+               bound_type_t *bound);
 
 // TODO: REMOVE ALL DEBUG PRINTS
 inline void print_int_vector(const int32_t v[], const int n, const char *name) {

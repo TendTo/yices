@@ -14,9 +14,11 @@
 #include <stdbool.h>
 
 typedef struct {
+  bool free;
   bool is_finite;
   bool is_strict;
   bool is_lb;
+  mpq_t gmp_val;
   rational_t val;
 } bound_type_t;
 
@@ -35,5 +37,12 @@ typedef struct {
   thvar_t *basic_vars;
   uint32_t nb_vars;
 } external_solution_t;
+
+inline void bound_type_clear(bound_type_t *bound) {
+  if (bound->free) {
+    mpq_clear(bound->gmp_val);
+    bound->free = false;
+  }
+}
 
 #endif // __EXTERNAL_SIMPLEX_TYPES_H

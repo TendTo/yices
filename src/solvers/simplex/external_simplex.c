@@ -87,32 +87,44 @@ void init_and_copy_to_gmp(const rational_t *const r, mpq_t uninitialized_val) {
   copy_to_gmp(r, uninitialized_val);
 }
 
-mpq_ptr get_bound(bound_type_t bound, mpq_ptr ninf, mpq_ptr inf,
-                  bool *used_temp, mpq_t *temp) {
-  assert(!*used_temp);
-  // Infinity bound
-  if (!bound.is_finite) {
-    return bound.is_lb ? ninf : inf;
+void get_bound(const simplex_solver_t *const solver, const thvar_t v,
+               const bool is_lower_bound, bound_type_t *bound) {
+  const int32_t bound_idx = is_lower_bound ? solver->vtbl.lower_index[v]
+                                           : solver->vtbl.upper_index[v];
+  xrational_t *bounds = solver->bstack.bound;
+  assert(bound); // Bound must be non-null
+
+  bound->free = false;
+  bound->is_finite = bound_idx > -1;
+  bound->is_strict =
+      __smt2_globals.delta < 0 &&
+      (bound->is_finite ? !xq_is_rational(&bounds[bound_idx]) : false);
+
+  if (!bound->is_finite)
+    return;
+
+  assert(bound_idx >= 0 && bound_idx < solver->bstack.size);
+  const rational_t *val = &bounds[bound_idx].main;
+
+  if (is_rat32(val)) { // Need to convert to GMP
+    bound->free = true;
+    mpq_init(bound->gmp_val);
+    mpq_set_int32(bound->gmp_val, val->s.num, val->s.den);
+  } else if (__smt2_globals.epsilon_mode && bound->is_strict) {
+    // Need to use temp to adjust value with epsilon
+    bound->free = true;
+    mpq_init(bound->gmp_val);
+    mpq_set(bound->gmp_val, get_gmp(val));
   }
 
-  // Finite bound
-  if (is_rat32(&bound.val)) { // Need to convert to GMP
-    *used_temp = true;
-    inplace_convert_to_gmp(&bound.val, temp);
-  } else if (bound.is_strict) { // Need to use temp to adjust value with epsilon
-    *used_temp = true;
-    mpq_init(*temp);
-    mpq_set(*temp, get_gmp(&bound.val));
-    set_ratgmp(&bound.val, *temp);
-  }
-  if (bound.is_strict) { // Adjust the bounds with epsilon
-    if (bound.is_lb) {
-      mpq_add(get_gmp(&bound.val), get_gmp(&bound.val), epsilon);
+  if (__smt2_globals.epsilon_mode && bound->is_strict) {
+    // Adjust the bounds with epsilon
+    if (is_lower_bound) {
+      mpq_add(bound->gmp_val, bound->gmp_val, epsilon);
     } else {
-      mpq_sub(get_gmp(&bound.val), get_gmp(&bound.val), epsilon);
+      mpq_sub(bound->gmp_val, bound->gmp_val, epsilon);
     }
   }
-  return get_gmp(&bound.val);
 }
 
 bool has_lb(const simplex_solver_t *const solver, const thvar_t v) {
@@ -168,7 +180,7 @@ void mpq_vector_clear(mpq_t v[], const int n) {
 }
 
 bool is_strict_var_zero(mpq_t x) {
-  return __smt2_globals.delta < 0 && __smt2_globals.strict_mode &&
+  return __smt2_globals.delta < 0 && __smt2_globals.epsilon_mode &&
          mpq_cmp_ui(x, 0, 1) == 0;
 }
 
