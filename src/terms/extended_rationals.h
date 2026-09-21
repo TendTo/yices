@@ -202,8 +202,10 @@ static inline void xq_clear(xrational_t *r) {
   q_clear(&r->delta);
 }
 
-
-
+static inline void xq_set_mpq_prenormalize(xrational_t *r, const mpq_t q) {
+  q_set_mpq_prenormalize(&r->main, q);
+  q_clear(&r->delta);
+}
 
 /*
  * Assignment operations:
