@@ -11,15 +11,17 @@
 #include "solvers/egraph/egraph_base_types.h"
 #include "terms/extended_rationals.h"
 #include "terms/rationals.h"
+#include "utils/int_bv_sets.h"
+
 #include <stdbool.h>
 
 typedef struct {
-  bool free;
-  bool is_finite;
-  bool is_strict;
-  bool is_lb;
-  mpq_t gmp_val;
-  rational_t val;
+  bool free;      ///< If true, the mpq_t val needs to be cleared
+  bool is_finite; ///< If true, the bound is finite
+  bool is_strict; ///< If true, the bound is strict
+  bool is_lb; ///< Whether the bound is a lower bound (1) or an upper bound (0)
+  mpq_t val;  ///< The value of the bound, if it is finite.
+  ///< If free is true, this needs to be cleared after use.
 } bound_type_t;
 
 typedef enum {
@@ -34,13 +36,13 @@ typedef struct {
   external_simplex_status_t status;
   xrational_t *x;
   uint32_t nvars;
-  thvar_t *basic_vars;
-  uint32_t nb_vars;
+  int_bvset_t b_vars;
+  int_bvset_t nb_vars;
 } external_solution_t;
 
 inline void bound_type_clear(bound_type_t *bound) {
   if (bound->free) {
-    mpq_clear(bound->gmp_val);
+    mpq_clear(bound->val);
     bound->free = false;
   }
 }

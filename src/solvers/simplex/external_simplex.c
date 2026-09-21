@@ -14,6 +14,7 @@
 #include "simplex_printer.h"
 #include "simplex_types.h"
 #include "solvers/simplex/external_qsoptex.h"
+#include "solvers/simplex/simplex_utils.h"
 #include "terms/rationals.h"
 
 #include <inttypes.h>
@@ -46,8 +47,8 @@ void external_solution_init(external_solution_t *sol, const uint32_t nvars) {
   sol->status = EXTERNAL_SIMPLEX_ERROR;
   sol->nvars = nvars;
   sol->x = (xrational_t *)safe_malloc(nvars * sizeof(xrational_t));
-  sol->basic_vars = (thvar_t *)safe_malloc(nvars * sizeof(thvar_t));
-  sol->nb_vars = 0;
+  init_int_bvset(&sol->b_vars, nvars);
+  init_int_bvset(&sol->nb_vars, nvars);
   for (uint32_t i = 0; i < nvars; i++) {
     xq_init(sol->x + i);
   }
@@ -58,10 +59,9 @@ void external_solution_clear(external_solution_t *sol) {
     xq_clear(sol->x + i);
   }
   sol->nvars = 0;
-  sol->nb_vars = 0;
-  free(sol->basic_vars);
+  delete_int_bvset(&sol->b_vars);
+  delete_int_bvset(&sol->nb_vars);
   free(sol->x);
-  sol->basic_vars = NULL;
   sol->x = NULL;
 }
 
@@ -74,24 +74,36 @@ static void inplace_convert_to_gmp(rational_t *const r, mpq_t *const loc) {
   set_ratgmp(r, *loc);
 }
 
-void copy_to_gmp(const rational_t *const r, mpq_t val) {
-  if (is_ratgmp(r)) {
-    mpq_set(val, get_gmp(r));
+void copy_to_gmp(mpq_t dest, const rational_t *const src) {
+  if (is_ratgmp(src)) {
+    mpq_set(dest, get_gmp(src));
   } else {
-    mpq_set_int32(val, get_num(r), get_den(r));
+    mpq_set_int32(dest, get_num(src), get_den(src));
   }
 }
 
-void init_and_copy_to_gmp(const rational_t *const r, mpq_t uninitialized_val) {
-  mpq_init(uninitialized_val);
-  copy_to_gmp(r, uninitialized_val);
+void sub_to_gmp(mpq_t dest, mpq_t src, const rational_t *const subtrahend) {
+  if (is_ratgmp(subtrahend)) {
+    mpq_sub(dest, src, get_gmp(subtrahend));
+  } else {
+    mpq_t temp;
+    mpq_init(temp);
+    mpq_set_int32(temp, get_num(subtrahend), get_den(subtrahend));
+    mpq_sub(dest, src, temp);
+    mpq_clear(temp);
+  }
+}
+
+void init_and_copy_to_gmp(mpq_t dest, const rational_t *const src) {
+  mpq_init(dest);
+  copy_to_gmp(dest, src);
 }
 
 void get_bound(const simplex_solver_t *const solver, const thvar_t v,
                const bool is_lower_bound, bound_type_t *bound) {
   const int32_t bound_idx = is_lower_bound ? solver->vtbl.lower_index[v]
                                            : solver->vtbl.upper_index[v];
-  xrational_t *bounds = solver->bstack.bound;
+  xrational_t *const bounds = solver->bstack.bound;
   assert(bound); // Bound must be non-null
 
   bound->free = false;
@@ -108,33 +120,154 @@ void get_bound(const simplex_solver_t *const solver, const thvar_t v,
 
   if (is_rat32(val)) { // Need to convert to GMP
     bound->free = true;
-    mpq_init(bound->gmp_val);
-    mpq_set_int32(bound->gmp_val, val->s.num, val->s.den);
+    mpq_init(bound->val);
+    mpq_set_int32(bound->val, get_num(val), get_den(val));
   } else if (__smt2_globals.epsilon_mode && bound->is_strict) {
-    // Need to use temp to adjust value with epsilon
     bound->free = true;
-    mpq_init(bound->gmp_val);
-    mpq_set(bound->gmp_val, get_gmp(val));
+    mpq_init(bound->val);
+    mpq_set(bound->val, get_gmp(val));
+  } else {
+    printf("Using existing GMP value for bound of variable %d\n", v);
+    memcpy(bound->val, get_gmp(val), sizeof(mpq_t));
   }
 
   if (__smt2_globals.epsilon_mode && bound->is_strict) {
     // Adjust the bounds with epsilon
     if (is_lower_bound) {
-      mpq_add(bound->gmp_val, bound->gmp_val, epsilon);
+      mpq_add(bound->val, bound->val, epsilon);
     } else {
-      mpq_sub(bound->gmp_val, bound->gmp_val, epsilon);
+      mpq_sub(bound->val, bound->val, epsilon);
     }
   }
 }
 
+void import_external_solution(simplex_solver_t *solver,
+                              external_solution_t *sol) {
+  assert(solver);
+  assert(sol);
+
+  const int_bvset_t *const new_basis = &sol->b_vars;
+  xrational_t *const new_values = sol->x;
+  matrix_t *const matrix = &solver->matrix;
+  arith_vartable_t *const vtbl = &solver->vtbl;
+
+#if 0 // For debug
+  for(DenseSet::const_iterator i = newBasis.begin(), i_end = newBasis.end(); i != i_end; ++i){
+    ArithVar b = *i;
+    if(d_tableau.isBasic(b)){
+      std::cout << "Variable " << b << " => ";
+      if (d_variables.isAuxiliary(b))
+        std::cout << d_variables.asNode(b).getName();
+      else
+        d_variables.printModel(b, std::cout);
+      std::cout << " is basic" << std::endl;
+    }
+  }
+#endif
+
+  int_bvset_t missing_nb_vars;
+  init_int_bvset(&missing_nb_vars, solver->vtbl.nvars);
+  for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
+    if (matrix_is_nonbasic_var(matrix, v)) {
+      int_bvset_add(&missing_nb_vars, v);
+    }
+  }
+  //
+  // for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
+  //   thvar_t currentlyNb = v;
+  //   if (matrix_is_nonbasic_var(matrix, v)) {
+  //     xrational_t *old_value = arith_var_value(vtbl, v);
+  //     xrational_t *new_value = new_values + v;
+  //     if (!xq_eq(new_value, old_value)) {
+  //       printf("Updating variable %d from ", v);
+  //       if (variable_at_upper_bound(solver, v)) {
+  //         update_to_lower_bound(solver, v);
+  //       } else if (variable_at_lower_bound(solver, v)) {
+  //         update_to_upper_bound(solver, v);
+  //       } else {
+  //         printf("unknown bound\n");
+  //         exit(1);
+  //       }
+  //     }
+  //   }
+  // }
+  // d_errorSet.reduceToSignals();
+  // d_errorSet.setSelectionRule(options::ErrorSelectionRule::VAR_ORDER);
+  //
+  // if (processSignals()) {
+  //   Trace("arith::findModel") << "attemptSolution() early conflict" << endl;
+  //   d_conflictVariables.purge();
+  //   return Result::UNSAT;
+  // } else if (d_errorSet.errorEmpty()) {
+  //   Trace("arith::findModel") << "attemptSolution() fixed itself" << endl;
+  //   return Result::SAT;
+  // }
+  //
+  // // The simple assignment was not enough, extended search is needed
+  // ++d_statistics.d_extendedSearch;
+  //
+  // while (!needsToBeAdded.empty() && !d_errorSet.errorEmpty()) {
+  //   ArithVar toRemove = ARITHVAR_SENTINEL;
+  //   ArithVar toAdd = ARITHVAR_SENTINEL;
+  //   DenseSet::const_iterator i = needsToBeAdded.begin(),
+  //                            i_end = needsToBeAdded.end();
+  //   for (; toAdd == ARITHVAR_SENTINEL && i != i_end; ++i) {
+  //     ArithVar v = *i;
+  //
+  //     Tableau::ColIterator colIter = d_tableau.colIterator(v);
+  //     for (; !colIter.atEnd(); ++colIter) {
+  //       const Tableau::Entry &entry = *colIter;
+  //       Assert(entry.getColVar() == v);
+  //       ArithVar b = d_tableau.rowIndexToBasic(entry.getRowIndex());
+  //       if (!newBasis.isMember(b)) {
+  //         toAdd = v;
+  //
+  //         bool favorBOverToRemove = (toRemove == ARITHVAR_SENTINEL) ||
+  //                                   (matchesNewValue(newValues, toRemove) &&
+  //                                    !matchesNewValue(newValues, b)) ||
+  //                                   (d_tableau.basicRowLength(toRemove) >
+  //                                    d_tableau.basicRowLength(b));
+  //
+  //         if (favorBOverToRemove) {
+  //           toRemove = b;
+  //         }
+  //       }
+  //     }
+  //   }
+  //   Assert(toRemove != ARITHVAR_SENTINEL);
+  //   Assert(toAdd != ARITHVAR_SENTINEL);
+  //
+  //   Trace("arith::forceNewBasis") << toRemove << " " << toAdd << endl;
+  //
+  //   d_linEq.pivotAndUpdate(toRemove, toAdd, newValues[toRemove]);
+  //
+  //   Trace("arith::forceNewBasis") << needsToBeAdded.size() << "to go" <<
+  //   endl; needsToBeAdded.remove(toAdd);
+  //
+  //   bool conflict = processSignals();
+  //   if (conflict) {
+  //     d_errorSet.reduceToSignals();
+  //     d_conflictVariables.purge();
+  //
+  //     return Result::UNSAT;
+  //   }
+  // }
+  // Assert(d_conflictVariables.empty());
+  //
+  // if (d_errorSet.errorEmpty()) {
+  //   return Result::SAT;
+  // } else {
+  //   d_errorSet.reduceToSignals();
+  //   return Result::UNKNOWN;
+  // }
+}
+
 bool has_lb(const simplex_solver_t *const solver, const thvar_t v) {
-  const int32_t lb_idx = solver->vtbl.lower_index[v];
-  return lb_idx > -1;
+  return solver->vtbl.lower_index[v] > -1;
 }
 
 bool has_ub(const simplex_solver_t *const solver, const thvar_t v) {
-  const int32_t ub_idx = solver->vtbl.upper_index[v];
-  return ub_idx > -1;
+  return solver->vtbl.upper_index[v] > -1;
 }
 
 bool has_any_bound(const simplex_solver_t *const solver, const thvar_t v) {

@@ -33,8 +33,9 @@ bool is_above_ub(simplex_solver_t *solver, thvar_t x, xrational_t *value);
 xrational_t *get_lb(simplex_solver_t *solver, thvar_t x);
 xrational_t *get_ub(simplex_solver_t *solver, thvar_t x);
 
-void copy_to_gmp(const rational_t *r, mpq_t val);
-void init_and_copy_to_gmp(const rational_t *r, mpq_t uninitialized_val);
+void init_and_copy_to_gmp(mpq_t dest, const rational_t *src);
+void copy_to_gmp(mpq_t dest, const rational_t *src);
+void sub_to_gmp(mpq_t dest, mpq_t src, const rational_t *subtrahend);
 
 void mpq_vector_clear(mpq_t v[], int n);
 
@@ -69,6 +70,9 @@ bool is_strict_var_zero(mpq_t x);
  */
 void get_bound(const simplex_solver_t *solver, thvar_t v, bool is_lower_bound,
                bound_type_t *bound);
+
+void import_external_solution(simplex_solver_t *solver,
+                              external_solution_t *sol);
 
 // TODO: REMOVE ALL DEBUG PRINTS
 inline void print_int_vector(const int32_t v[], const int n, const char *name) {
@@ -148,7 +152,7 @@ inline void print_char_vector(const char v[], const int n, const char *name) {
   printf("]\n");
 }
 
-inline void print_external_solution(const external_solution_t *sol) {
+inline void print_external_solution(external_solution_t *sol) {
   printf("external_solution_t {\n");
   switch (sol->status) {
   case EXTERNAL_SIMPLEX_FEASIBLE:
@@ -169,12 +173,23 @@ inline void print_external_solution(const external_solution_t *sol) {
   }
   printf("  nvars: %d\n", sol->nvars);
   print_xrational_vector(sol->x, (int)sol->nvars, "  x");
-  printf("}\n");
-  printf("basic vars: %d\n", sol->nb_vars);
-  for (uint32_t i = 0; i < sol->nb_vars; i++) {
-    printf("%d ", sol->basic_vars[i]);
+  int n = 0;
+  for (uint32_t i = 0; i < sol->nvars; i++) {
+    if (int_bvset_member(&sol->b_vars, i)) {
+      printf("%d ", i);
+      n++;
+    }
   }
-  printf("\n");
+  printf("\nbasic vars: %d\n", n);
+  n = 0;
+  for (uint32_t i = 0; i < sol->nvars; i++) {
+    if (int_bvset_member(&sol->nb_vars, i)) {
+      printf("%d ", i);
+      n++;
+    }
+  }
+  printf("\nnon-basic vars: %d\n", n);
+  printf("}\n");
 }
 
 #endif

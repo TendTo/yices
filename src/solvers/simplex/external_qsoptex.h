@@ -19,8 +19,8 @@ typedef char VarStatus;
 typedef int SolverStatus;
 
 typedef struct {
-  mpq_QSprob prob;       ///< The QSopt_ex LP problem
-  SolverStatus d_status; ///< Status of the LP problem after solving
+  mpq_QSprob prob;     ///< The QSopt_ex LP problem
+  SolverStatus status; ///< Status of the LP problem after solving
 
   thvar_t *col_to_var; ///< Map from column index in the LP to theory var
   thvar_t *row_to_var; ///< Map from row index in the LP to theory var
@@ -28,12 +28,14 @@ typedef struct {
   int32_t *var_to_col; ///< Map from theory var to column index in the LP
   int32_t *var_to_row; ///< Map from theory var to row index in the LP
 
-  int32_t n_aux; ///< Number of auxiliary variables
+  int32_t n_struct; ///< Number of structural variables
+  int32_t n_aux;    ///< Number of auxiliary variables
 
   mpq_t *rhs;    ///< Right-hand side of the constraints
   mpq_t *range;  ///< Range of the constraints
   char *sense;   ///< Sense of the constraints ('E', 'G', 'L', or 'R')
-  rational_t x;  ///< Temporary rational for storing the solution
+  mpq_t *x;      ///< Temporary rational for storing the solution
+  mpq_t *y;      ///< Temporary rational for storing the dual solution
   QSbasis basis; ///< Basis information for the solution
 } qsx_t;
 
