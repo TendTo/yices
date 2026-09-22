@@ -30,6 +30,9 @@
 #include "solvers/simplex/external_simplex.h"
 #include "solvers/simplex/integrality_constraints.h"
 #include "solvers/simplex/simplex.h"
+
+#include "api/yices_globals.h"
+#include "frontend/smt2/smt2_commands.h"
 #include "terms/rational_hash_maps.h"
 #include "utils/assert_utils.h"
 #include "utils/bitvectors.h"
@@ -635,6 +638,7 @@ static void init_simplex_statistics(simplex_stats_t *stat) {
   stat->external_success = 0;
   stat->external_failure = 0;
   stat->adjustment_pivots = 0;
+  stat->external_lp_solver = __smt2_globals.external_lp_solver;
 
   stat->num_make_intfeasible = 0;
   stat->num_bound_conflicts = 0;
@@ -1021,30 +1025,6 @@ static bool simplex_eliminable_variable(simplex_solver_t *solver, thvar_t x) {
     && ! arith_var_has_eterm(&solver->vtbl, x);
 }
 #endif
-
-/*
- * Check whether the value of x is between its bound
- */
-static bool value_satisfies_lower_bound(simplex_solver_t *solver, thvar_t x) {
-  int32_t k;
-
-  k = arith_var_lower_index(&solver->vtbl, x);
-  return k < 0 || xq_le(solver->bstack.bound + k, arith_var_value(&solver->vtbl, x));
-}
-
-static bool value_satisfies_upper_bound(simplex_solver_t *solver, thvar_t x) {
-  int32_t k;
-
-  k = arith_var_upper_index(&solver->vtbl, x);
-  return k < 0 || xq_ge(solver->bstack.bound + k, arith_var_value(&solver->vtbl, x));
-}
-
-static bool value_satisfies_bounds(simplex_solver_t *solver, thvar_t x) {
-  return value_satisfies_lower_bound(solver, x) && value_satisfies_upper_bound(solver, x);
-}
-
-
-
 
 
 /*
@@ -4105,6 +4085,8 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   int32_t r, k;
   uint32_t repeats, loops, bthreshold;
   bool feasible;
+  bool invoked_external_solver;
+  external_import_status_t status;
 
 #if TRACE
   printf("---> SIMPLEX: CHECK FEASIBILITY\n");
@@ -4122,6 +4104,8 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   repeats = 0;
   solver->use_blands_rule = false;
   loops = 0;
+  invoked_external_solver = false;
+  status = EXTERNAL_IMPORT_UNKNOWN;
 
   /*
    * Bland threshold: adjust it based on the number of variables
@@ -4134,7 +4118,6 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   }
 
   for (;;) {
-    simplex_check_feasibility_external(solver);
     // check interrupt at every iteration
     if (solver->interrupted) {
       feasible = false;
@@ -4146,6 +4129,11 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
       if ((loops & 0xFFF) == 0) {
 	trace_puts(solver->core->trace, 15, ".");
       }
+    }
+
+    if (solver->stats.num_pivots >= __smt2_globals.pivot_threshold) {
+      invoked_external_solver = true;
+      status = simplex_check_feasibility_external(solver);
     }
 
     x = int_heap_get_min(&solver->infeasible_vars);
@@ -4177,6 +4165,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
         matrix_pivot(matrix, r, k);
         update_to_lower_bound(solver, x);
         solver->stats.num_pivots ++;
+        solver->stats.adjustment_pivots += invoked_external_solver ? 1 : 0;
       }
 
     } else if (variable_above_upper_bound(solver, x)) {
@@ -4194,6 +4183,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
         matrix_pivot(matrix, r, k);
         update_to_upper_bound(solver, x);
         solver->stats.num_pivots ++;
+        solver->stats.adjustment_pivots += invoked_external_solver ? 1 : 0;
       }
     }
 
@@ -4238,6 +4228,15 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
     printf("---> Simplex: arithmetic conflict\n");
   }
 #endif
+
+  if (invoked_external_solver) {
+    if ((feasible && status == EXTERNAL_IMPORT_FEASIBLE)
+      || (!feasible && status == EXTERNAL_IMPORT_INFEASIBLE)) {
+      solver->stats.external_success++;
+    } else {
+      solver->stats.external_failure++;
+    }
+  }
 
   return feasible;
 }

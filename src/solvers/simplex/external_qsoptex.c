@@ -581,8 +581,6 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
                          external_solution_t *const solution) {
   const mpq_QSprob *const prob = &qsx->prob;
 
-  // Should have room for the (rowcount) "logical" variables, which come after
-  // the (colcount) "structural" variables.
   unsigned int precision = 0;
   mpq_t delta;
   mpq_init(delta);

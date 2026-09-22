@@ -2347,16 +2347,20 @@ static void set_unsat_model_interpolants_option(smt2_globals_t *g, const char *n
 
 void smt2_set_external_solver(const char solver[]) {
   if (strcmp(solver, "soplex") == 0) {
-    __smt2_globals.external_solver = EXTERNAL_SOLVER_SOPLEX;
+    __smt2_globals.external_lp_solver = EXTERNAL_SOLVER_SOPLEX;
   } else if (strcmp(solver, "qsoptex") == 0) {
-    __smt2_globals.external_solver = EXTERNAL_SOLVER_QSOPTEX;
+    __smt2_globals.external_lp_solver = EXTERNAL_SOLVER_QSOPTEX;
   } else {
-    print_error("option :external-solver must be either \"z3\" or \"cvc5\"");
+    print_error("option :external-lp-solver must be either \"soplex\" or \"qsoptex\"");
   }
 }
 
 void smt2_set_epsilon_mode(const bool enable_epsilon_mode) {
   __smt2_globals.epsilon_mode = enable_epsilon_mode;
+}
+
+void smt2_set_pivot_threshold(const uint32_t pivot_threshold) {
+  __smt2_globals.pivot_threshold = pivot_threshold;
 }
 
 void smt2_set_delta(const double delta) {
@@ -4769,8 +4773,9 @@ static void init_smt2_globals(smt2_globals_t *g) {
   g->produce_assignments = false;
   g->random_seed = 0;  // 0 means any seed is good
   g->verbosity = 0;
-  g->external_solver = EXTERNAL_SOLVER_AUTO;
+  g->external_lp_solver = EXTERNAL_SOLVER_AUTO;
   g->epsilon_mode = false;
+  g->pivot_threshold = -1;
   g->delta = -1.0;
   init_ctx_params(&g->ctx_parameters);
   init_params_to_defaults(&g->parameters);

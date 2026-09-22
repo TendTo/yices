@@ -1144,6 +1144,7 @@ static void show_simplex_stats(simplex_stats_t *stat) {
   printf(" external calls success  : %"PRIu32"\n", stat->external_success);
   printf(" external calls failure  : %"PRIu32"\n", stat->external_failure);
   printf(" adjustment pivots       : %"PRIu32"\n", stat->adjustment_pivots);
+  printf(" external lp solver      : %"PRIu32"\n", stat->external_lp_solver);
   printf(" bland-rule activations  : %"PRIu32"\n", stat->num_blands);
   printf(" simple lemmas           : %"PRIu32"\n", stat->num_binary_lemmas);
   //  printf(" propagation lemmas      : %"PRIu32"\n", stat->num_prop_lemmas);  (it's always zero)

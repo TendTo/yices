@@ -647,6 +647,7 @@ typedef struct simplex_stats_s {
   uint32_t external_success;
   uint32_t external_failure;
   uint32_t adjustment_pivots;
+  uint32_t external_lp_solver;
 
   // stats on integer arithmetic solver
   uint32_t num_make_intfeasible;        // calls to make_integer_feasible

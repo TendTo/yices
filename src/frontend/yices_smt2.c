@@ -147,9 +147,10 @@ static double ef_ematch_term_alpha;
 static int32_t ef_ematch_cnstr_mode;
 static int32_t ef_ematch_term_mode;
 
-static char* external_solver;
+static char* external_lp_solver;
 static bool is_strict;
 static double delta;
+static uint32_t pivot_threshold;
 
 static uint32_t nthreads;
 
@@ -206,6 +207,7 @@ typedef enum optid {
   external_solver_opt,              // use an external solver
   epsilon_opt,                      // enable epsilon mode
   delta_opt,                        // set delta for delta-complete mode
+  pivot_threshold_opt,              // set pivot threshold
   nthreads_opt,                     // number of threads
 } optid_t;
 
@@ -260,9 +262,10 @@ static option_desc_t options[NUM_OPTIONS] = {
   { "ematch-term-alpha", '\0', MANDATORY_FLOAT, ematch_term_alpha_opt },
   { "ematch-cnstr-mode", '\0', MANDATORY_STRING, ematch_cnstr_mode_opt },
   { "ematch-term-mode", '\0', MANDATORY_STRING, ematch_term_mode_opt },
-  {"external-solver", '\0', MANDATORY_STRING, external_solver_opt},
+  {"external-lp-solver", '\0', MANDATORY_STRING, external_solver_opt},
   {"epsilon", '\0', FLAG_OPTION, epsilon_opt},
   {"delta", '\0', MANDATORY_FLOAT, delta_opt},
+{"pivot-threshold", '\0', MANDATORY_INT, pivot_threshold_opt},
   { "nthreads", 'n', MANDATORY_INT, nthreads_opt },
 };
 
@@ -453,9 +456,10 @@ static void parse_command_line(int argc, char *argv[]) {
   ef_ematch_cnstr_mode = -1;
   ef_ematch_term_mode = -1;
 
-  external_solver = "";
+  external_lp_solver = "";
   is_strict = false;
   delta = -1.0;
+  pivot_threshold = -1;
 
   nthreads = 0;
 
@@ -517,7 +521,7 @@ static void parse_command_line(int argc, char *argv[]) {
         break;
 
       case external_solver_opt:
-        external_solver = elem.s_value;
+        external_lp_solver = elem.s_value;
         break;
 
       case epsilon_opt:
@@ -530,6 +534,10 @@ static void parse_command_line(int argc, char *argv[]) {
           fprintf(stderr, "%s: the delta must be positive\n", parser.command_name);
           goto bad_usage;
         }
+        break;
+
+      case pivot_threshold_opt:
+        pivot_threshold = elem.i_value;
         break;
 
       case nthreads_opt:
@@ -1230,8 +1238,8 @@ int main(int argc, char *argv[]) {
       smt2_enable_trace_tag(trace_tags.data[i]);
     }
   }
-  if (external_solver != NULL) {
-    smt2_set_external_solver(external_solver);
+  if (external_lp_solver != NULL) {
+    smt2_set_external_solver(external_lp_solver);
   }
   if (delta != -1.0) {
     smt2_set_delta(delta);
@@ -1239,6 +1247,7 @@ int main(int argc, char *argv[]) {
   if (is_strict) {
     smt2_set_epsilon_mode(true);
   }
+  smt2_set_pivot_threshold(pivot_threshold);
 
   setup_options();
   setup_options_mcsat();
