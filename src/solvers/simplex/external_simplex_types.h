@@ -33,6 +33,12 @@ typedef enum {
 } external_simplex_status_t;
 
 typedef enum {
+  EXTERNAL_IMPORT_FEASIBLE,
+  EXTERNAL_IMPORT_INFEASIBLE,
+  EXTERNAL_IMPORT_UNKNOWN,
+} external_import_status_t;
+
+typedef enum {
   VAR_BOUND_UNKNOWN = 0,
   VAR_BOUND_AT_LOWER,
   VAR_BOUND_AT_UPPER

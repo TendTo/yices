@@ -138,13 +138,89 @@ void get_bound(const simplex_solver_t *const solver, const thvar_t v,
   }
 }
 
-void import_external_solution(simplex_solver_t *solver,
-                              external_solution_t *sol) {
+static void update_nb_value(simplex_solver_t *const solver,
+                            const external_solution_t *const sol,
+                            const thvar_t v) {
+  assert(matrix_is_nonbasic_var(&solver->matrix, v));
+  switch (sol->bounds[v]) {
+  case VAR_BOUND_AT_LOWER:
+    if (!variable_at_lower_bound(solver, v)) {
+      update_to_lower_bound(solver, v);
+    }
+    break;
+  case VAR_BOUND_AT_UPPER:
+    if (!variable_at_upper_bound(solver, v)) {
+      update_to_upper_bound(solver, v);
+    }
+    break;
+  default:
+    if (!xq_eq(sol->x + v, arith_var_value(&solver->vtbl, v))) {
+      // TODO: explore the possibility of breaking the invariant
+      //  that non-basic variables are at a bound
+      printf("ERROR: Variable %d has unknown bound\n", v);
+      exit(1);
+    }
+  }
+}
+
+static void sync_infeasible_vars(simplex_solver_t *const solver) {
+  print_int_heap(&solver->infeasible_vars);
+  reset_int_heap(&solver->infeasible_vars);
+
+  for (uint32_t i = 0; i < solver->matrix.nrows; i++) {
+    const thvar_t x = matrix_basic_var(&solver->matrix, i);
+    if (!value_satisfies_bounds(solver, x)) {
+      int_heap_add(&solver->infeasible_vars, x);
+    }
+  }
+  printf("Synced infeasible vars: ");
+  print_int_heap(&solver->infeasible_vars);
+}
+
+/*
+ * Find a basic variable in row r0
+ * - matrix->row[r0] must be equal to row0
+ * - row0 has at least 3 elements
+ */
+static bool alignment_pivot(matrix_t *const matrix, const uint32_t r,
+                            int_bvset_t *const valid_targets) {
+  const row_t *const row0 = matrix->row[r];
+  assert(matrix->row[r0] == row0);
+
+  uint32_t best_i = -1;
+  uint32_t best_c = UINT32_MAX;
+
+  // find the lower-cost variable to pivot
+  for (uint32_t i = 0; i < row0->size; i++) {
+    const int32_t x = row0->data[i].c_idx;
+    if (x >= 0 && x != const_idx && int_bvset_member(valid_targets, x)) {
+      const uint32_t c = matrix->column[x]->nelems;
+      if (c < best_c) {
+        best_c = c;
+        best_i = i;
+      }
+    }
+  }
+
+  if (best_i == -1) {
+    printf("No valid pivot found in row %d\n", r);
+    return false;
+  }
+
+  // make best_x the basic variable for r0
+  assert(best_x >= 0);
+  matrix_pivot(matrix, r, best_i);
+  assert(matrix->base_var[r0] == best_x);
+  return true;
+}
+
+external_import_status_t
+import_external_solution(simplex_solver_t *const solver,
+                         external_solution_t *const sol) {
   assert(solver);
   assert(sol);
 
-  const int_bvset_t *const new_basis = &sol->b_vars;
-  xrational_t *const new_values = sol->x;
+  int_bvset_t *const new_nb = &sol->nb_vars;
   matrix_t *const matrix = &solver->matrix;
   arith_vartable_t *const vtbl = &solver->vtbl;
 
@@ -162,101 +238,64 @@ void import_external_solution(simplex_solver_t *solver,
   }
 #endif
 
-  int_bvset_t missing_nb_vars;
-  init_int_bvset(&missing_nb_vars, solver->vtbl.nvars);
   for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
-    if (matrix_is_nonbasic_var(matrix, v)) {
+    // Only update non-basic variables,
+    // hoping to get a feasible solution immediately
+    if (matrix_is_nonbasic_var(matrix, v) && int_bvset_member(new_nb, v)) {
+      // TODO: should we violate the invariant that non-basic variables are at a
+      // bound?
+      update_nb_value(solver, sol, v);
+      assert(value_satisfies_bounds(solver, v));
+    }
+  }
+
+  sync_infeasible_vars(solver);
+  if (int_heap_is_empty(&solver->infeasible_vars)) {
+    return EXTERNAL_IMPORT_FEASIBLE;
+  }
+
+  // The simple assignment was not enough, extended search is needed
+  static int extended_search_count = 0;
+  extended_search_count++;
+
+  int_bvset_t missing_nb_vars;
+  init_int_bvset(&missing_nb_vars, vtbl->nvars);
+  for (thvar_t v = 0; v < vtbl->nvars; v++) {
+    // Add the values that are basic but must become non-basic to the set
+    if (!matrix_is_nonbasic_var(matrix, v)) {
       int_bvset_add(&missing_nb_vars, v);
     }
   }
-  //
-  // for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
-  //   thvar_t currentlyNb = v;
-  //   if (matrix_is_nonbasic_var(matrix, v)) {
-  //     xrational_t *old_value = arith_var_value(vtbl, v);
-  //     xrational_t *new_value = new_values + v;
-  //     if (!xq_eq(new_value, old_value)) {
-  //       printf("Updating variable %d from ", v);
-  //       if (variable_at_upper_bound(solver, v)) {
-  //         update_to_lower_bound(solver, v);
-  //       } else if (variable_at_lower_bound(solver, v)) {
-  //         update_to_upper_bound(solver, v);
-  //       } else {
-  //         printf("unknown bound\n");
-  //         exit(1);
-  //       }
-  //     }
-  //   }
-  // }
-  // d_errorSet.reduceToSignals();
-  // d_errorSet.setSelectionRule(options::ErrorSelectionRule::VAR_ORDER);
-  //
-  // if (processSignals()) {
-  //   Trace("arith::findModel") << "attemptSolution() early conflict" << endl;
-  //   d_conflictVariables.purge();
-  //   return Result::UNSAT;
-  // } else if (d_errorSet.errorEmpty()) {
-  //   Trace("arith::findModel") << "attemptSolution() fixed itself" << endl;
-  //   return Result::SAT;
-  // }
-  //
-  // // The simple assignment was not enough, extended search is needed
-  // ++d_statistics.d_extendedSearch;
-  //
-  // while (!needsToBeAdded.empty() && !d_errorSet.errorEmpty()) {
-  //   ArithVar toRemove = ARITHVAR_SENTINEL;
-  //   ArithVar toAdd = ARITHVAR_SENTINEL;
-  //   DenseSet::const_iterator i = needsToBeAdded.begin(),
-  //                            i_end = needsToBeAdded.end();
-  //   for (; toAdd == ARITHVAR_SENTINEL && i != i_end; ++i) {
-  //     ArithVar v = *i;
-  //
-  //     Tableau::ColIterator colIter = d_tableau.colIterator(v);
-  //     for (; !colIter.atEnd(); ++colIter) {
-  //       const Tableau::Entry &entry = *colIter;
-  //       Assert(entry.getColVar() == v);
-  //       ArithVar b = d_tableau.rowIndexToBasic(entry.getRowIndex());
-  //       if (!newBasis.isMember(b)) {
-  //         toAdd = v;
-  //
-  //         bool favorBOverToRemove = (toRemove == ARITHVAR_SENTINEL) ||
-  //                                   (matchesNewValue(newValues, toRemove) &&
-  //                                    !matchesNewValue(newValues, b)) ||
-  //                                   (d_tableau.basicRowLength(toRemove) >
-  //                                    d_tableau.basicRowLength(b));
-  //
-  //         if (favorBOverToRemove) {
-  //           toRemove = b;
-  //         }
-  //       }
-  //     }
-  //   }
-  //   Assert(toRemove != ARITHVAR_SENTINEL);
-  //   Assert(toAdd != ARITHVAR_SENTINEL);
-  //
-  //   Trace("arith::forceNewBasis") << toRemove << " " << toAdd << endl;
-  //
-  //   d_linEq.pivotAndUpdate(toRemove, toAdd, newValues[toRemove]);
-  //
-  //   Trace("arith::forceNewBasis") << needsToBeAdded.size() << "to go" <<
-  //   endl; needsToBeAdded.remove(toAdd);
-  //
-  //   bool conflict = processSignals();
-  //   if (conflict) {
-  //     d_errorSet.reduceToSignals();
-  //     d_conflictVariables.purge();
-  //
-  //     return Result::UNSAT;
-  //   }
-  // }
-  // Assert(d_conflictVariables.empty());
-  //
-  // if (d_errorSet.errorEmpty()) {
-  //   return Result::SAT;
-  // } else {
-  //   d_errorSet.reduceToSignals();
-  //   return Result::UNKNOWN;
-  // }
+
+  while (!int_bvset_is_empty(&missing_nb_vars) &&
+         !int_heap_is_empty(&solver->infeasible_vars)) {
+
+    // Go over all variables that we need to add to the basis
+    for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
+      if (!int_bvset_member(&missing_nb_vars, v)) {
+        continue;
+      }
+      assert(matrix_is_basic_var(matrix, v));
+
+      // Get the basic row
+      if (alignment_pivot(matrix, matrix_basic_row(matrix, v),
+                          &missing_nb_vars)) {
+        // A pivot has been performed.
+        // v is now non-basic and can be removed from the set
+        int_heap_remove(&solver->infeasible_vars, v);
+        int_bvset_remove(&missing_nb_vars, v);
+        break;
+      }
+    }
+
+    if (int_heap_is_empty(&solver->infeasible_vars)) {
+      delete_int_bvset(&missing_nb_vars);
+      return EXTERNAL_IMPORT_FEASIBLE;
+    }
+  }
+
+  delete_int_bvset(&missing_nb_vars);
+  return EXTERNAL_IMPORT_UNKNOWN;
 }
 
 bool has_lb(const simplex_solver_t *const solver, const thvar_t v) {
@@ -314,9 +353,10 @@ bool is_strict_var_zero(mpq_t x) {
          mpq_cmp_ui(x, 0, 1) == 0;
 }
 
-bool simplex_check_feasibility_external(simplex_solver_t *solver) {
+external_import_status_t
+simplex_check_feasibility_external(simplex_solver_t *solver) {
   if (!solver->tableau_ready)
-    return true;
+    return EXTERNAL_IMPORT_UNKNOWN;
 
   printf("\n\n*** SIMPLEX START ***\n");
   // print_simplex_vars_summary(stdout, solver);
@@ -331,24 +371,28 @@ bool simplex_check_feasibility_external(simplex_solver_t *solver) {
   printf("\n");
 
   external_solution_t solution = new_external_solution(solver->vtbl.nvars);
-  switch (__smt2_globals.external_solver) {
+  switch (__smt2_globals.external_lp_solver) {
   case EXTERNAL_SOLVER_AUTO:
   case EXTERNAL_SOLVER_QSOPTEX:
+    // solver->stats.external_lp_solver = EXTERNAL_SOLVER_QSOPTEX;
     printf("Using QSopt_ex as external solver\n");
     qsx_solve(solver, &solution);
     break;
   case EXTERNAL_SOLVER_SOPLEX:
+    // solver->stats.external_lp_solver = EXTERNAL_SOLVER_SOPLEX;
     printf("Using SoPlex as external solver\n");
     printf("SoPlex is not yet implemented, using QSopt_ex instead\n");
     break;
   default:
-    printf("Unknown external solver: %d\n", __smt2_globals.external_solver);
+    printf("Unknown external solver: %d\n", __smt2_globals.external_lp_solver);
     break;
   }
 
   printf("\n==== Solution ====\n");
   print_external_solution(&solution);
+  const external_import_status_t status =
+      import_external_solution(solver, &solution);
   external_solution_clear(&solution);
 
-  return true;
+  return status;
 }

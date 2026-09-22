@@ -12,6 +12,30 @@
 #include "solvers/simplex/simplex_types.h"
 
 /*
+ * Check whether the value of x is between its bound
+ */
+static bool value_satisfies_lower_bound(simplex_solver_t *solver, thvar_t x) {
+  int32_t k;
+
+  k = arith_var_lower_index(&solver->vtbl, x);
+  return k < 0 ||
+         xq_le(solver->bstack.bound + k, arith_var_value(&solver->vtbl, x));
+}
+
+static bool value_satisfies_upper_bound(simplex_solver_t *solver, thvar_t x) {
+  int32_t k;
+
+  k = arith_var_upper_index(&solver->vtbl, x);
+  return k < 0 ||
+         xq_ge(solver->bstack.bound + k, arith_var_value(&solver->vtbl, x));
+}
+
+static bool value_satisfies_bounds(simplex_solver_t *solver, thvar_t x) {
+  return value_satisfies_lower_bound(solver, x) &&
+         value_satisfies_upper_bound(solver, x);
+}
+
+/*
  * Check whether value v is between the bounds on x
  */
 static inline bool value_ge_lower_bound(simplex_solver_t *solver, thvar_t x,

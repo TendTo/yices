@@ -39,7 +39,8 @@ void sub_to_gmp(mpq_t dest, mpq_t src, const rational_t *subtrahend);
 
 void mpq_vector_clear(mpq_t v[], int n);
 
-bool simplex_check_feasibility_external(simplex_solver_t *solver);
+external_import_status_t
+simplex_check_feasibility_external(simplex_solver_t *solver);
 
 bool is_strict_var_zero(mpq_t x);
 
@@ -57,9 +58,9 @@ bool is_strict_var_zero(mpq_t x);
  * @param bound the value of bound,
  * including whether it is a lower or upper bound, and whether it is strict.
  * @param ninf a pointer to the negative infinity mpq_t.
- * Its value is external-solver-dependent.
+ * Its value is external-lp-solver-dependent.
  * @param inf a pointer to the positive infinity mpq_t.
- * Its value is external-solver-dependent.
+ * Its value is external-lp-solver-dependent.
  * @param[out] used_temp whether a temporary allocation was used.
  * If true, the caller is responsible for clearing the temporary mpq_t after
  * use.
@@ -71,8 +72,8 @@ bool is_strict_var_zero(mpq_t x);
 void get_bound(const simplex_solver_t *solver, thvar_t v, bool is_lower_bound,
                bound_type_t *bound);
 
-void import_external_solution(simplex_solver_t *solver,
-                              external_solution_t *sol);
+external_import_status_t import_external_solution(simplex_solver_t *solver,
+                                                  external_solution_t *sol);
 
 // TODO: REMOVE ALL DEBUG PRINTS
 inline void print_int_vector(const int32_t v[], const int n, const char *name) {
@@ -190,6 +191,21 @@ inline void print_external_solution(external_solution_t *sol) {
   }
   printf("\nnon-basic vars: %d\n", n);
   printf("}\n");
+}
+
+inline void print_int_heap(const int_heap_t *heap) {
+  if (heap == NULL) {
+    printf("int_heap: NULL\n");
+    return;
+  }
+  printf("int_heap: [");
+  for (uint32_t i = 1; i < heap->size; i++) {
+    printf("%d", heap->heap[i]);
+    if (i < heap->size - 1) {
+      printf(", ");
+    }
+  }
+  printf("]\n");
 }
 
 #endif
