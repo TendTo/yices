@@ -357,6 +357,7 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
 static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
                               external_solution_t *const sol, const int r) {
   xrational_t *x = sol->x;
+  var_bound_state_t *bounds = sol->bounds;
   const thvar_t v = qsx->row_to_var[r];
   const char var_status = qsx->basis.rstat[r];
 
@@ -382,12 +383,10 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
     mpq_clear(rhs);
 
     if (is_below_lb(solver, v, x + v)) {
-      xq_set(x + v, get_lb(solver, v));
+      bounds[v] = VAR_BOUND_AT_LOWER;
     } else if (is_above_ub(solver, v, x + v)) {
-      xq_set(x + v, get_ub(solver, v));
+      bounds[v] = VAR_BOUND_AT_UPPER;
     }
-    assert(!is_above_ub(solver, v, x + v));
-    assert(!is_below_lb(solver, v, x + v));
     break;
   // For non-basic variables we know the value is at a bound
   // and we can use the d_vars/proper LP bounds directly
@@ -404,13 +403,14 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
         mpq_add(rhs, rhs, qsx->y[r]);
       }
       xq_set_mpq_prenormalize(sol->x + v, rhs);
+      mpq_clear(rhs);
     } else {
       if (qsx->sense[r] == 'G' || qsx->sense[r] == 'R') {
         assert(has_lb(solver, v));
-        xq_set(x + v, get_lb(solver, v));
+        bounds[v] = VAR_BOUND_AT_LOWER;
       } else if (qsx->sense[r] == 'L') {
         assert(has_ub(solver, v));
-        xq_set(x + v, get_ub(solver, v));
+        bounds[v] = VAR_BOUND_AT_UPPER;
       } else {
         printf("Unknown sense for row %d: %c\n", r, qsx->sense[r]);
         exit(1);
@@ -419,7 +419,7 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
     break;
   case QS_COL_BSTAT_UPPER:
     assert(has_ub(solver, v));
-    xq_set(x + v, get_ub(solver, v));
+    bounds[v] = VAR_BOUND_AT_UPPER;
     break;
   default:
     printf("Unknown variable status for variable %d: %c\n", v, var_status);

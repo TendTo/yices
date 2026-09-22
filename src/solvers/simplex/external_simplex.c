@@ -47,10 +47,14 @@ void external_solution_init(external_solution_t *sol, const uint32_t nvars) {
   sol->status = EXTERNAL_SIMPLEX_ERROR;
   sol->nvars = nvars;
   sol->x = (xrational_t *)safe_malloc(nvars * sizeof(xrational_t));
+  sol->bounds =
+      (var_bound_state_t *)safe_malloc(nvars * sizeof(var_bound_state_t));
+
   init_int_bvset(&sol->b_vars, nvars);
   init_int_bvset(&sol->nb_vars, nvars);
   for (uint32_t i = 0; i < nvars; i++) {
     xq_init(sol->x + i);
+    sol->bounds[i] = VAR_BOUND_UNKNOWN;
   }
 }
 
@@ -63,15 +67,8 @@ void external_solution_clear(external_solution_t *sol) {
   delete_int_bvset(&sol->nb_vars);
   free(sol->x);
   sol->x = NULL;
-}
-
-static void inplace_convert_to_gmp(rational_t *const r, mpq_t *const loc) {
-  assert(loc);
-  assert(!is_ratgmp(r));
-
-  mpq_init(*loc);
-  mpq_set_int32(*loc, get_num(r), get_den(r));
-  set_ratgmp(r, *loc);
+  free(sol->bounds);
+  sol->bounds = NULL;
 }
 
 void copy_to_gmp(mpq_t dest, const rational_t *const src) {

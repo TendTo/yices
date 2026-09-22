@@ -32,9 +32,16 @@ typedef enum {
   EXTERNAL_SIMPLEX_EXHAUSTED,
 } external_simplex_status_t;
 
+typedef enum {
+  VAR_BOUND_UNKNOWN = 0,
+  VAR_BOUND_AT_LOWER,
+  VAR_BOUND_AT_UPPER
+} var_bound_state_t;
+
 typedef struct {
   external_simplex_status_t status;
   xrational_t *x;
+  var_bound_state_t *bounds;
   uint32_t nvars;
   int_bvset_t b_vars;
   int_bvset_t nb_vars;
