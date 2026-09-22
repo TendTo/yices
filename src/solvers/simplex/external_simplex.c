@@ -164,7 +164,7 @@ static void update_nb_value(simplex_solver_t *const solver,
 }
 
 static void sync_infeasible_vars(simplex_solver_t *const solver) {
-  print_int_heap(&solver->infeasible_vars);
+  // print_int_heap(&solver->infeasible_vars);
   reset_int_heap(&solver->infeasible_vars);
 
   for (uint32_t i = 0; i < solver->matrix.nrows; i++) {
@@ -173,8 +173,8 @@ static void sync_infeasible_vars(simplex_solver_t *const solver) {
       int_heap_add(&solver->infeasible_vars, x);
     }
   }
-  printf("Synced infeasible vars: ");
-  print_int_heap(&solver->infeasible_vars);
+  // printf("Synced infeasible vars: ");
+  // print_int_heap(&solver->infeasible_vars);
 }
 
 /*
@@ -358,29 +358,26 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
   if (!solver->tableau_ready)
     return EXTERNAL_IMPORT_UNKNOWN;
 
-  printf("\n\n*** SIMPLEX START ***\n");
-  // print_simplex_vars_summary(stdout, solver);
-  printf("==== Pivots ====\n");
-  printf("%d", solver->stats.num_pivots);
-  printf("\n==== Simplex variables ====\n");
-  print_simplex_vars(stdout, solver);
-  printf("\n==== Tableau ====\n");
-  print_simplex_matrix(stdout, solver);
-  printf("\n==== Bounds  ====\n");
-  print_simplex_bounds(stdout, solver);
-  printf("\n");
+  // printf("\n\n*** SIMPLEX START ***\n");
+  // // print_simplex_vars_summary(stdout, solver);
+  // printf("==== Pivots ====\n");
+  // printf("%d", solver->stats.num_pivots);
+  // printf("\n==== Simplex variables ====\n");
+  // print_simplex_vars(stdout, solver);
+  // printf("\n==== Tableau ====\n");
+  // print_simplex_matrix(stdout, solver);
+  // printf("\n==== Bounds  ====\n");
+  // print_simplex_bounds(stdout, solver);
+  // printf("\n");
 
   external_solution_t solution = new_external_solution(solver->vtbl.nvars);
   switch (__smt2_globals.external_lp_solver) {
-  case EXTERNAL_SOLVER_AUTO:
-  case EXTERNAL_SOLVER_QSOPTEX:
-    // solver->stats.external_lp_solver = EXTERNAL_SOLVER_QSOPTEX;
-    printf("Using QSopt_ex as external solver\n");
+  case EXTERNAL_LP_SOLVER_QSOPTEX:
+    // solver->stats.external_lp_solver = EXTERNAL_LP_SOLVER_QSOPTEX;
     qsx_solve(solver, &solution);
     break;
-  case EXTERNAL_SOLVER_SOPLEX:
-    // solver->stats.external_lp_solver = EXTERNAL_SOLVER_SOPLEX;
-    printf("Using SoPlex as external solver\n");
+  case EXTERNAL_LP_SOLVER_SOPLEX:
+    // solver->stats.external_lp_solver = EXTERNAL_LP_SOLVER_SOPLEX;
     printf("SoPlex is not yet implemented, using QSopt_ex instead\n");
     break;
   default:
@@ -388,8 +385,8 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
     break;
   }
 
-  printf("\n==== Solution ====\n");
-  print_external_solution(&solution);
+  // printf("\n==== Solution ====\n");
+  // print_external_solution(&solution);
   const external_import_status_t status =
       import_external_solution(solver, &solution);
   external_solution_clear(&solution);
