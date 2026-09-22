@@ -193,9 +193,8 @@ typedef enum smt2_opcodes {
 #define NUM_SMT2_OPCODES (SMT2_MK_DIVISIBLE+1)
 
 typedef enum {
-  EXTERNAL_SOLVER_AUTO,
-  EXTERNAL_SOLVER_QSOPTEX,
-  EXTERNAL_SOLVER_SOPLEX,
+  EXTERNAL_LP_SOLVER_QSOPTEX,
+  EXTERNAL_LP_SOLVER_SOPLEX,
 } external_solver_t;
 
 
@@ -403,7 +402,7 @@ typedef struct smt2_globals_s {
   uint32_t verbosity;             // default = 0
 
   uint32_t pivot_threshold;          // default = MAX_UINT32
-  external_solver_t external_lp_solver; // default = EXTERNAL_SOLVER_AUTO
+  external_solver_t external_lp_solver; // default = EXTERNAL_LP_SOLVER_QSOPTEX
   bool epsilon_mode;                 // default = false
   double delta;                      // default = -1.0
 

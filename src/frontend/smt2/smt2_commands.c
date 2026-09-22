@@ -1731,6 +1731,14 @@ static void show_simplex_stats(int fd, print_buffer_t *b, simplex_solver_t *solv
   print_string_and_uint32(fd, b, " :simplex-rows ", simplex_num_rows(solver));
   print_string_and_uint32(fd, b, " :simplex-atoms ", simplex_num_atoms(solver));
   print_string_and_uint32(fd, b, " :simplex-pivots ", simplex_num_pivots(solver));
+  print_string_and_float(fd, b, " :simplex-max-delta ", simplex_max_delta(solver));
+  print_string_and_uint32(fd, b, " :simplex-max-precision ", simplex_max_precision(solver));
+  print_string_and_uint32(fd, b, " :simplex-delta-calls ", simplex_delta_calls(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-calls ", simplex_external_calls(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-success ", simplex_external_success(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-failure ", simplex_external_failure(solver));
+  print_string_and_uint32(fd, b, " :simplex-adjustment-pivots ", simplex_adjustment_pivots(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-lp-solver ", simplex_external_lp_solver(solver));
   print_string_and_uint32(fd, b, " :simplex-conflicts ", simplex_num_conflicts(solver));
   print_string_and_uint32(fd, b, " :simplex-interface-lemmas ", simplex_num_interface_lemmas(solver));
   if (simplex_num_make_integer_feasible(solver) > 0 ||
@@ -2347,11 +2355,9 @@ static void set_unsat_model_interpolants_option(smt2_globals_t *g, const char *n
 
 void smt2_set_external_solver(const char solver[]) {
   if (strcmp(solver, "soplex") == 0) {
-    __smt2_globals.external_lp_solver = EXTERNAL_SOLVER_SOPLEX;
-  } else if (strcmp(solver, "qsoptex") == 0) {
-    __smt2_globals.external_lp_solver = EXTERNAL_SOLVER_QSOPTEX;
+    __smt2_globals.external_lp_solver = EXTERNAL_LP_SOLVER_SOPLEX;
   } else {
-    print_error("option :external-lp-solver must be either \"soplex\" or \"qsoptex\"");
+    __smt2_globals.external_lp_solver = EXTERNAL_LP_SOLVER_QSOPTEX;
   }
 }
 
@@ -4773,7 +4779,7 @@ static void init_smt2_globals(smt2_globals_t *g) {
   g->produce_assignments = false;
   g->random_seed = 0;  // 0 means any seed is good
   g->verbosity = 0;
-  g->external_lp_solver = EXTERNAL_SOLVER_AUTO;
+  g->external_lp_solver = EXTERNAL_LP_SOLVER_QSOPTEX;
   g->epsilon_mode = false;
   g->pivot_threshold = -1;
   g->delta = -1.0;

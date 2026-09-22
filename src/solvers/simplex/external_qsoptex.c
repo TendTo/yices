@@ -162,9 +162,6 @@ static void add_cols(simplex_solver_t *const solver, const qsx_t *const qsx) {
     bound_type_clear(&lb);
     bound_type_clear(&ub);
   }
-
-  printf("Added %d free variables and %d auxiliary variables\n", free_vars,
-         aux_vars);
 }
 
 /**
@@ -191,15 +188,6 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
   for (thvar_t v = 0; v < n_vars; v++) {
     // Skip structural variables and constants
     if (!arith_var_def_is_poly(&solver->vtbl, v)) {
-      // if (arith_var_is_free(&solver->vtbl, v)) {
-      //   printf("Skipping free variable %d\n", v);
-      // } else if (arith_var_def_is_product(&solver->vtbl, v)) {
-      //   printf("Skipping product variable %d\n", v);
-      // } else if (arith_var_def_is_rational(&solver->vtbl, v)) {
-      //   printf("Skipping rational variable %d\n", v);
-      // } else {
-      //   printf("Skipping variable %d because it is not a polynomial\n", v);
-      // }
       continue;
     }
 
@@ -242,12 +230,10 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
       qsx->sense[row_idx] = 'L';
     } else // Unbounded
     {
-      printf("Adding unbounded row %d\n", row_idx);
+      // printf("Adding unbounded row %d\n", row_idx);
       mpq_set(qsx->rhs[row_idx], mpq_NINFTY);
       qsx->sense[row_idx] = 'G';
-      printf("Unbounded variable %d\n", v);
-      print_polynomial(stdout, p);
-      printf("\n");
+      // printf("Unbounded variable %d\n", v);
     }
 
     bound_type_clear(&lb);
@@ -260,8 +246,7 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
       const rational_t *coeff = &mono->coeff;
 
       if (x == const_idx) {
-        printf("Adding constant term to row %d\n", row_idx);
-        q_print(stdout, coeff);
+        // printf("Adding constant term to row %d\n", row_idx);
         sub_to_gmp(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
 #ifndef NDEBUG
         get_bound(solver, v, true, &lb);
@@ -566,7 +551,7 @@ static void qsx_build_problem(simplex_solver_t *const solver,
                               qsx_t *const qsx) {
   add_cols(solver, qsx);
   add_rows(solver, qsx);
-  mpq_QSdump_prob(qsx->prob);
+  // mpq_QSdump_prob(qsx->prob);
   // static int i = '0';
   // char filename[256];
   // snprintf(

@@ -464,6 +464,37 @@ static inline uint32_t simplex_num_interface_lemmas(simplex_solver_t *solver) {
   return solver->stats.num_interface_lemmas;
 }
 
+static inline double simplex_max_delta(simplex_solver_t *solver) {
+  return solver->stats.max_delta;
+}
+
+static inline uint32_t simplex_max_precision(simplex_solver_t *solver) {
+  return solver->stats.max_precision;
+}
+
+static inline uint32_t simplex_delta_calls(simplex_solver_t *solver) {
+  return solver->stats.delta_calls;
+}
+
+static inline uint32_t simplex_external_calls(simplex_solver_t *solver) {
+  return solver->stats.external_calls;
+}
+
+static inline uint32_t simplex_external_success(simplex_solver_t *solver) {
+  return solver->stats.external_success;
+}
+
+static inline uint32_t simplex_external_failure(simplex_solver_t *solver) {
+  return solver->stats.external_failure;
+}
+
+static inline uint32_t simplex_adjustment_pivots(simplex_solver_t *solver) {
+  return solver->stats.adjustment_pivots;
+}
+
+static inline uint32_t simplex_external_lp_solver(simplex_solver_t *solver) {
+  return solver->stats.external_lp_solver;
+}
 
 /*
  * Statistics for integer/mixed integer problems
