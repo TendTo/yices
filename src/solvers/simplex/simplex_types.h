@@ -644,6 +644,7 @@ typedef struct simplex_stats_s {
   uint32_t max_precision;
   uint32_t delta_calls;
   uint32_t external_calls;
+  uint32_t external_extended_search_count;
   uint32_t external_success;
   uint32_t external_failure;
   uint32_t adjustment_pivots;

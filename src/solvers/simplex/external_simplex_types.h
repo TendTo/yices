@@ -53,7 +53,7 @@ typedef struct {
   int_bvset_t nb_vars;
 } external_solution_t;
 
-inline void bound_type_clear(bound_type_t *bound) {
+static inline void bound_type_clear(bound_type_t *bound) {
   if (bound->free) {
     mpq_clear(bound->val);
     bound->free = false;

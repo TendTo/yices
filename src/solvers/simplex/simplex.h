@@ -476,6 +476,10 @@ static inline uint32_t simplex_delta_calls(simplex_solver_t *solver) {
   return solver->stats.delta_calls;
 }
 
+static inline uint32_t simplex_external_extended_search_count(simplex_solver_t *solver) {
+  return solver->stats.external_extended_search_count;
+}
+
 static inline uint32_t simplex_external_calls(simplex_solver_t *solver) {
   return solver->stats.external_calls;
 }

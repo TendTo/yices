@@ -635,6 +635,7 @@ static void init_simplex_statistics(simplex_stats_t *stat) {
   stat->max_precision = 0;
   stat->delta_calls = 0;
   stat->external_calls = 0;
+  stat->external_extended_search_count = 0;
   stat->external_success = 0;
   stat->external_failure = 0;
   stat->adjustment_pivots = 0;

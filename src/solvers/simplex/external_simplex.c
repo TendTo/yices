@@ -185,7 +185,7 @@ static void sync_infeasible_vars(simplex_solver_t *const solver) {
 static bool alignment_pivot(matrix_t *const matrix, const uint32_t r,
                             int_bvset_t *const valid_targets) {
   const row_t *const row0 = matrix->row[r];
-  assert(matrix->row[r0] == row0);
+  assert(matrix->row[r] == row0);
 
   uint32_t best_i = -1;
   uint32_t best_c = UINT32_MAX;
@@ -207,10 +207,8 @@ static bool alignment_pivot(matrix_t *const matrix, const uint32_t r,
     return false;
   }
 
-  // make best_x the basic variable for r0
-  assert(best_x >= 0);
+  // make the variable of index best_i the basic variable for r
   matrix_pivot(matrix, r, best_i);
-  assert(matrix->base_var[r0] == best_x);
   return true;
 }
 
@@ -255,8 +253,7 @@ import_external_solution(simplex_solver_t *const solver,
   }
 
   // The simple assignment was not enough, extended search is needed
-  static int extended_search_count = 0;
-  extended_search_count++;
+  solver->stats.external_extended_search_count++;
 
   int_bvset_t missing_nb_vars;
   init_int_bvset(&missing_nb_vars, vtbl->nvars);
@@ -357,6 +354,8 @@ external_import_status_t
 simplex_check_feasibility_external(simplex_solver_t *solver) {
   if (!solver->tableau_ready)
     return EXTERNAL_IMPORT_UNKNOWN;
+
+  solver->stats.external_calls++;
 
   // printf("\n\n*** SIMPLEX START ***\n");
   // // print_simplex_vars_summary(stdout, solver);

@@ -7,11 +7,10 @@
  */
 #include "external_qsoptex.h"
 
-#include "external_simplex.h"
 #include "frontend/smt2/smt2_commands.h"
 #include "io/term_printer.h"
-#include "simplex_printer.h"
-#include "simplex_types.h"
+#include "solvers/simplex/external_simplex.h"
+#include "solvers/simplex/simplex_types.h"
 #include "utils/memalloc.h"
 #include <stdbool.h>
 
@@ -250,10 +249,9 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
         sub_to_gmp(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
 #ifndef NDEBUG
         get_bound(solver, v, true, &lb);
-        assert(!lb.is_finite);
-        bound_type_clear(&lb);
         get_bound(solver, v, false, &ub);
-        assert(!ub.is_finite);
+        assert(lb.is_finite || ub.is_finite);
+        bound_type_clear(&lb);
         bound_type_clear(&ub);
 #endif
       } else {
@@ -429,124 +427,6 @@ static void extract_solution(simplex_solver_t *solver, qsx_t *qsx,
   }
 }
 
-#if 0
-
-
-
-external_solution_t import_result(simplex_solver_t *solver,
-                                  external_solution_t *sol) {
-  const int new_basis[] = {};
-  const xrational_t *const new_values = sol->x;
-
-#if 0 // For debug
-  for(DenseSet::const_iterator i = newBasis.begin(), i_end = newBasis.end(); i != i_end; ++i){
-    ArithVar b = *i;
-    if(d_tableau.isBasic(b)){
-      std::cout << "Variable " << b << " => ";
-      if (d_variables.isAuxiliary(b))
-        std::cout << d_variables.asNode(b).getName();
-      else
-        d_variables.printModel(b, std::cout);
-      std::cout << " is basic" << std::endl;
-    }
-  }
-#endif
-
-  int needs_to_be_added[solver->vtbl.nvars];
-  int needs_to_be_added_idx = 0;
-  for (int32_t i = 0; i < solver->vtbl.nvars; i++) {
-    // TODO: if the basic variable is NOT in the basis, mark it
-    if (matrix_is_nonbasic_var(&solver->matrix, i)) {
-      needs_to_be_added[needs_to_be_added_idx++] = i;
-    }
-  }
-
-  for (int i = 0; i < needs_to_be_added_idx; i++) {
-    const mpq_t *const val = &new_values[i];
-    if (!d_tableau.isBasic(currentlyNb)) {
-      if (!matchesNewValue(newValues, currentlyNb)) {
-        const DeltaRational &newValue = newValues[currentlyNb];
-        printf("Updating variable %d from %s to %s\n", currentlyNb,
-               d_variables.getAssignment(currentlyNb).toString().c_str(),
-               newValue.toString().c_str());
-        d_linEq.update(currentlyNb, newValue);
-        Assert(d_variables.assignmentIsConsistent(currentlyNb));
-      }
-    }
-  }
-  d_errorSet.reduceToSignals();
-  d_errorSet.setSelectionRule(options::ErrorSelectionRule::VAR_ORDER);
-
-  if (processSignals()) {
-    Trace("arith::findModel") << "attemptSolution() early conflict" << endl;
-    d_conflictVariables.purge();
-    return Result::UNSAT;
-  } else if (d_errorSet.errorEmpty()) {
-    Trace("arith::findModel") << "attemptSolution() fixed itself" << endl;
-    return Result::SAT;
-  }
-
-  // The simple assignment was not enough, extended search is needed
-  ++d_statistics.d_extendedSearch;
-
-  while (!needs_to_be_added.empty() && !d_errorSet.errorEmpty()) {
-    ArithVar toRemove = ARITHVAR_SENTINEL;
-    ArithVar toAdd = ARITHVAR_SENTINEL;
-    DenseSet::const_iterator i = needs_to_be_added.begin(),
-                             i_end = needs_to_be_added.end();
-    for (; toAdd == ARITHVAR_SENTINEL && i != i_end; ++i) {
-      ArithVar v = *i;
-
-      Tableau::ColIterator colIter = d_tableau.colIterator(v);
-      for (; !colIter.atEnd(); ++colIter) {
-        const Tableau::Entry &entry = *colIter;
-        Assert(entry.getColVar() == v);
-        ArithVar b = d_tableau.rowIndexToBasic(entry.getRowIndex());
-        if (!newBasis.isMember(b)) {
-          toAdd = v;
-
-          bool favorBOverToRemove = (toRemove == ARITHVAR_SENTINEL) ||
-                                    (matchesNewValue(newValues, toRemove) &&
-                                     !matchesNewValue(newValues, b)) ||
-                                    (d_tableau.basicRowLength(toRemove) >
-                                     d_tableau.basicRowLength(b));
-
-          if (favorBOverToRemove) {
-            toRemove = b;
-          }
-        }
-      }
-    }
-    Assert(toRemove != ARITHVAR_SENTINEL);
-    Assert(toAdd != ARITHVAR_SENTINEL);
-
-    Trace("arith::forceNewBasis") << toRemove << " " << toAdd << endl;
-
-    d_linEq.pivotAndUpdate(toRemove, toAdd, newValues[toRemove]);
-
-    Trace("arith::forceNewBasis")
-        << needs_to_be_added.size() << "to go" << endl;
-    needs_to_be_added.remove(toAdd);
-
-    bool conflict = processSignals();
-    if (conflict) {
-      d_errorSet.reduceToSignals();
-      d_conflictVariables.purge();
-
-      return Result::UNSAT;
-    }
-  }
-  Assert(d_conflictVariables.empty());
-
-  if (d_errorSet.errorEmpty()) {
-    return Result::SAT;
-  } else {
-    d_errorSet.reduceToSignals();
-    return Result::UNKNOWN;
-  }
-}
-#endif
-
 static void qsx_build_problem(simplex_solver_t *const solver,
                               qsx_t *const qsx) {
   add_cols(solver, qsx);
@@ -570,11 +450,10 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   mpq_t delta;
   mpq_init(delta);
   mpq_set_d(delta, __smt2_globals.delta);
-  int status = 0;
 
   [[maybe_unused]] const int res =
       QSdelta_solver(*prob, delta, qsx->x, qsx->y, &qsx->basis, &precision,
-                     PRIMAL_SIMPLEX, &status, NULL, NULL);
+                     PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
   assert(res == 0);
 
   // Update the statistics
@@ -584,11 +463,7 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   if (new_delta > solver->stats.max_delta)
     solver->stats.max_delta = new_delta;
 
-#ifndef NDEBUG
-  std::cout << "The total infeas is " << delta << std::endl;
-#endif
-
-  switch (status) {
+  switch (qsx->status) {
   case QS_LP_OPTIMAL:
   case QS_LP_FEASIBLE:
   case QS_LP_DELTA_OPTIMAL:
@@ -607,7 +482,7 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
     solution->status = EXTERNAL_SIMPLEX_EXHAUSTED;
     break;
   default:
-    printf("QSopt_ex returned an unexpected status: %d\n", status);
+    printf("QSopt_ex returned an unexpected status: %d\n", qsx->status);
     solution->status = EXTERNAL_SIMPLEX_ERROR;
     break;
   }

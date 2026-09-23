@@ -646,6 +646,7 @@ static void show_simplex_stats(simplex_stats_t *stat) {
   fprintf(stderr, " max precision           : %"PRIu32"\n", stat->max_precision);
   fprintf(stderr, " delta calls             : %"PRIu32"\n", stat->delta_calls);
   fprintf(stderr, " external solver calls   : %"PRIu32"\n", stat->external_calls);
+  fprintf(stderr, " external extnd search   : %"PRIu32"\n", stat->external_extended_search_count);
   fprintf(stderr, " external calls success  : %"PRIu32"\n", stat->external_success);
   fprintf(stderr, " external calls failure  : %"PRIu32"\n", stat->external_failure);
   fprintf(stderr, " adjustment pivots       : %"PRIu32"\n", stat->adjustment_pivots);

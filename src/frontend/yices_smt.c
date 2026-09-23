@@ -1141,6 +1141,7 @@ static void show_simplex_stats(simplex_stats_t *stat) {
   printf(" max precision           : %"PRIu32"\n", stat->max_precision);
   printf(" delta calls             : %"PRIu32"\n", stat->delta_calls);
   printf(" external solver calls   : %"PRIu32"\n", stat->external_calls);
+  printf(" external extnd search   : %"PRIu32"\n", stat->external_extended_search_count);
   printf(" external calls success  : %"PRIu32"\n", stat->external_success);
   printf(" external calls failure  : %"PRIu32"\n", stat->external_failure);
   printf(" adjustment pivots       : %"PRIu32"\n", stat->adjustment_pivots);

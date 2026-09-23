@@ -1735,6 +1735,7 @@ static void show_simplex_stats(int fd, print_buffer_t *b, simplex_solver_t *solv
   print_string_and_uint32(fd, b, " :simplex-max-precision ", simplex_max_precision(solver));
   print_string_and_uint32(fd, b, " :simplex-delta-calls ", simplex_delta_calls(solver));
   print_string_and_uint32(fd, b, " :simplex-external-calls ", simplex_external_calls(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-extended-search-count ", simplex_external_extended_search_count(solver));
   print_string_and_uint32(fd, b, " :simplex-external-success ", simplex_external_success(solver));
   print_string_and_uint32(fd, b, " :simplex-external-failure ", simplex_external_failure(solver));
   print_string_and_uint32(fd, b, " :simplex-adjustment-pivots ", simplex_adjustment_pivots(solver));
