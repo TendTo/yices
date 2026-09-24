@@ -128,7 +128,6 @@ void get_bound(const simplex_solver_t *const solver, const thvar_t v,
     mpq_init(bound->val);
     mpq_set(bound->val, get_gmp(val));
   } else {
-    printf("Using existing GMP value for bound of variable %d\n", v);
     memcpy(bound->val, get_gmp(val), sizeof(mpq_t));
   }
 
@@ -212,7 +211,8 @@ static bool alignment_pivot(simplex_solver_t *const solver,
   }
 
   if (best_i == -1) {
-    printf("No valid pivot found in row %d\n", r);
+    trace_printf(solver->core->trace, 10, "No valid pivot found in row %d\n",
+                 r);
     return false;
   }
 
@@ -458,15 +458,15 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
   external_solution_t solution = new_external_solution(solver->vtbl.nvars);
   switch (__smt2_globals.external_lp_solver) {
   case EXTERNAL_LP_SOLVER_QSOPTEX:
-    // solver->stats.external_lp_solver = EXTERNAL_LP_SOLVER_QSOPTEX;
     qsx_solve(solver, &solution);
     break;
   case EXTERNAL_LP_SOLVER_SOPLEX:
-    // solver->stats.external_lp_solver = EXTERNAL_LP_SOLVER_SOPLEX;
     printf("SoPlex is not yet implemented, using QSopt_ex instead\n");
+    abort();
     break;
   default:
     printf("Unknown external solver: %d\n", __smt2_globals.external_lp_solver);
+    abort();
     break;
   }
 

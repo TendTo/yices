@@ -44,6 +44,30 @@ typedef struct {
 static const int pivot_threshold = 10000;
 static bool qsx_started = false;
 
+/**
+ * Check if a theory variable has been added to the LP problem as a column.
+ * @param qsx The QSopt_ex LP problem
+ * @param v The theory variable to check
+ * @return true if the variable is in the columns, false otherwise
+ */
+static bool var_in_columns(const qsx_t *const qsx, const thvar_t v) {
+  return qsx->var_to_col[v] != -1;
+}
+
+static bool var_is_valid_column(arith_vartable_t *const vtbl, const thvar_t v) {
+  if (arith_var_is_free(vtbl, v))
+    return true;
+  return false;
+}
+
+static bool var_is_valid_row(arith_vartable_t *const vtbl, const thvar_t v) {
+  if (!arith_var_def_is_poly(vtbl, v))
+    return false;
+  const polynomial_t *const p = arith_var_poly_def(vtbl, v);
+  assert(p);
+  return !(p->nterms == 1 && p->mono[0].var == const_idx);
+}
+
 static void global_qsx_start() {
   if (qsx_started)
     return;
@@ -74,24 +98,6 @@ static void qsx_init(qsx_t *qsx) {
   mpq_QSset_param(qsx->prob, QS_PARAM_SIMPLEX_MAX_ITERATIONS, pivot_threshold);
   mpq_QSset_param(qsx->prob, QS_PARAM_SIMPLEX_DISPLAY,
                   __smt2_globals.verbosity);
-}
-
-static bool var_in_columns(const qsx_t *const qsx, const thvar_t v) {
-  return qsx->var_to_col[v] != -1;
-}
-
-static bool var_is_valid_column(arith_vartable_t *const vtbl, const thvar_t v) {
-  if (arith_var_is_free(vtbl, v))
-    return true;
-  return false;
-}
-
-static bool var_is_valid_row(arith_vartable_t *const vtbl, const thvar_t v) {
-  if (!arith_var_def_is_poly(vtbl, v))
-    return false;
-  const polynomial_t *const p = arith_var_poly_def(vtbl, v);
-  assert(p);
-  return !(p->nterms == 1 && p->mono[0].var == const_idx);
 }
 
 static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
@@ -163,7 +169,8 @@ static void qsx_clear(qsx_t *const qsx) {
  * @param[out] qsx the QSopt_ex LP problem to which the columns will be
  * added
  */
-static void add_cols(simplex_solver_t *const solver, const qsx_t *const qsx) {
+static void add_cols_epsilon(simplex_solver_t *const solver,
+                             const qsx_t *const qsx) {
   mpq_QSprob prob = qsx->prob;
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
@@ -254,7 +261,8 @@ static int monomials_to_row(simplex_solver_t *const solver,
  * @param solver the simplex solver containing the rows
  * @param[out] qsx the QSopt_ex LP problem to which the rows will be added
  */
-static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
+static void add_rows_epsilon(simplex_solver_t *const solver,
+                             const qsx_t *const qsx) {
   mpq_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_aux];
   int begin_row_idx[qsx->n_aux];
@@ -355,8 +363,10 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
   safe_free(values);
 }
 
-static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
-                              external_solution_t *const sol, const int c) {
+static void extract_col_value_epsilon(simplex_solver_t *const solver,
+                                      qsx_t *const qsx,
+                                      external_solution_t *const sol,
+                                      const int c) {
   xrational_t *x = sol->x;
   const thvar_t v = qsx->col_to_var[c];
   const char var_status = qsx->basis.cstat[c];
@@ -420,8 +430,10 @@ static void row_value_to_solution(const qsx_t *const qsx,
   mpq_clear(rhs);
 }
 
-static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
-                              external_solution_t *const sol, const int r) {
+static void extract_row_value_epsilon(simplex_solver_t *const solver,
+                                      qsx_t *const qsx,
+                                      external_solution_t *const sol,
+                                      const int r) {
   xrational_t *x = sol->x;
   var_bound_state_t *bounds = sol->bounds;
   const thvar_t v = qsx->row_to_var[r];
@@ -475,39 +487,54 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
   }
 }
 
-static void extract_solution(simplex_solver_t *solver, qsx_t *qsx,
-                             external_solution_t *sol) {
+static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
+                                     external_solution_t *sol) {
   const mpq_QSprob *prob = &qsx->prob;
 
-  // The external solver did not find a valid solution
-  if (sol->status != EXTERNAL_SIMPLEX_FEASIBLE &&
-      sol->status != EXTERNAL_SIMPLEX_INFEASIBLE) {
-    return;
-  }
-
   for (int col_idx = 0; col_idx < mpq_QSget_colcount(*prob); col_idx++) {
-    extract_col_value(solver, qsx, sol, col_idx);
+    extract_col_value_epsilon(solver, qsx, sol, col_idx);
   }
   for (int row_idx = 0; row_idx < mpq_QSget_rowcount(*prob); row_idx++) {
-    extract_row_value(solver, qsx, sol, row_idx);
+    extract_row_value_epsilon(solver, qsx, sol, row_idx);
   }
 }
 
-static void qsx_build_problem(simplex_solver_t *const solver,
-                              qsx_t *const qsx) {
-  add_cols(solver, qsx);
-  add_rows(solver, qsx);
-#if 0
-  mpq_QSdump_prob(qsx->prob);
-  static int i = 0;
-  char filename[256];
-  snprintf(
-      filename, sizeof(filename),
-      "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/qsproblem_%d.lp",
-      i);
-  mpq_QSwrite_prob(qsx->prob, filename, "LP");
-  i++;
-#endif
+static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
+                                      qsx_t *const qsx) {
+  add_cols_epsilon(solver, qsx);
+  add_rows_epsilon(solver, qsx);
+}
+
+static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {}
+
+static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {}
+
+static void qsx_build_problem_strict(simplex_solver_t *const solver,
+                                     qsx_t *const qsx) {
+  add_cols_strict(solver, qsx);
+  add_rows_strict(solver, qsx);
+}
+
+static void extract_col_value_strict(simplex_solver_t *const solver,
+                                     qsx_t *const qsx,
+                                     external_solution_t *const sol,
+                                     const int c) {}
+
+static void extract_row_value_strict(simplex_solver_t *const solver,
+                                     qsx_t *const qsx,
+                                     external_solution_t *const sol,
+                                     const int r) {}
+
+static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
+                                    external_solution_t *sol) {
+  const mpq_QSprob *prob = &qsx->prob;
+
+  for (int col_idx = 0; col_idx < mpq_QSget_colcount(*prob); col_idx++) {
+    extract_col_value_strict(solver, qsx, sol, col_idx);
+  }
+  for (int row_idx = 0; row_idx < mpq_QSget_rowcount(*prob); row_idx++) {
+    extract_row_value_strict(solver, qsx, sol, row_idx);
+  }
 }
 
 static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
@@ -563,8 +590,29 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   qsx_t qsx;
   qsx_init(&qsx);
   qsx_init_vars(solver, &qsx);
-  qsx_build_problem(solver, &qsx);
+  if (__smt2_globals.epsilon_mode)
+    qsx_build_problem_epsilon(solver, &qsx);
+  else
+    qsx_build_problem_strict(solver, &qsx);
+#if 0
+  mpq_QSdump_prob(qsx->prob);
+  static int i = 0;
+  char filename[256];
+  snprintf(
+      filename, sizeof(filename),
+      "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/qsproblem_%d.lp",
+      i);
+  mpq_QSwrite_prob(qsx->prob, filename, "LP");
+  i++;
+#endif
   qsx_solve_lp(solver, &qsx, sol);
-  extract_solution(solver, &qsx, sol);
+  // Only extract a solution if the external solver found a valid one
+  if (sol->status == EXTERNAL_SIMPLEX_FEASIBLE ||
+      sol->status == EXTERNAL_SIMPLEX_INFEASIBLE) {
+    if (__smt2_globals.epsilon_mode)
+      extract_solution_epsilon(solver, &qsx, sol);
+    else
+      extract_solution_strict(solver, &qsx, sol);
+  }
   qsx_clear(&qsx);
 }
