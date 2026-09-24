@@ -4132,7 +4132,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
       }
     }
 
-    if (solver->stats.num_pivots >= __smt2_globals.pivot_threshold) {
+    if (solver->stats.num_pivots >= __smt2_globals.pivot_threshold && !invoked_external_solver) {
       invoked_external_solver = true;
       status = simplex_check_feasibility_external(solver);
     }

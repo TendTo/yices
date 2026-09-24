@@ -53,6 +53,20 @@ static void qsx_init(qsx_t *qsx) {
                   __smt2_globals.verbosity);
 }
 
+static bool var_in_columns(const qsx_t *const qsx, const thvar_t v) {
+  return qsx->var_to_col[v] != -1;
+}
+
+static bool var_is_valid_column(arith_vartable_t *const vtbl, const thvar_t v) {
+  if (arith_var_is_free(vtbl, v) || arith_var_def_is_rational(vtbl, v))
+    return true;
+  if (!arith_var_def_is_poly(vtbl, v))
+    return false;
+  const polynomial_t *const p = arith_var_poly_def(vtbl, v);
+  assert(p);
+  return p->nterms == 1 && p->mono[0].var == const_idx;
+}
+
 static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   const uint32_t nvars = solver->vtbl.nvars;
 
@@ -63,7 +77,7 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   for (thvar_t v = 0; v < nvars; v++) {
     if (arith_var_def_is_poly(&solver->vtbl, v)) {
       qsx->n_aux++;
-    } else if (arith_var_is_free(&solver->vtbl, v)) {
+    } else if (var_is_valid_column(&solver->vtbl, v)) {
       qsx->n_struct++;
     }
   }
@@ -129,38 +143,108 @@ static mpq_ptr qsx_get_y(mpq_QSprob prob, const int rowIdx) {
  * added
  */
 static void add_cols(simplex_solver_t *const solver, const qsx_t *const qsx) {
-  static bound_type_t lb, ub;
   mpq_QSprob prob = qsx->prob;
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
-  int free_vars = 0;
-  int aux_vars = 0;
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
   for (thvar_t v = 0; v < num_vars; v++) {
-    if (!arith_var_is_free(&solver->vtbl, v)) {
-      // If the variable is not free, it is because it is an auxiliary variable.
-      // We will encode those as rows later.
-      // printf("Skipping variable %d because it is not free\n", v);
-      // print_simplex_var(stdout, solver, v);
-      aux_vars++;
-      continue;
+
+    // Free variables. They come from the SMT input. Encode them as columns.
+    if (arith_var_is_free(&solver->vtbl, v)) {
+      bound_type_t lb, ub;
+      get_bound(solver, v, true, &lb);
+      get_bound(solver, v, false, &ub);
+
+      qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
+      qsx->var_to_col[v] = mpq_QSget_colcount(prob);
+      mpq_QSnew_col(prob, mpq_oneLpNum, lb.is_finite ? lb.val : mpq_NINFTY,
+                    ub.is_finite ? ub.val : mpq_INFTY, NULL);
+
+      bound_type_clear(&lb);
+      bound_type_clear(&ub);
+    } else if (arith_var_def_is_poly(&solver->vtbl, v)) {
+      polynomial_t *p = arith_var_poly_def(&solver->vtbl, v);
+      assert(p);
+      if (p->nterms == 1 && p->mono[0].var == const_idx) {
+        // This is a constant variable.
+        // To ensure it is accounted for, we can encode it as a fixed variable
+        const rational_t *coeff = &p->mono[0].coeff;
+        mpq_t temp;
+        init_and_copy_to_gmp(temp, coeff);
+        qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
+        qsx->var_to_col[v] = mpq_QSget_colcount(prob);
+        mpq_QSnew_col(prob, mpq_oneLpNum, temp, temp, NULL);
+        mpq_clear(temp);
+      }
+    } else if (arith_var_def_is_rational(&solver->vtbl, v)) {
+      // This is a rational variable. We can encode it as a fixed variable
+      const rational_t *coeff = arith_var_rational_def(&solver->vtbl, v);
+      mpq_t temp;
+      init_and_copy_to_gmp(temp, coeff);
+      qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
+      qsx->var_to_col[v] = mpq_QSget_colcount(prob);
+      mpq_QSnew_col(prob, mpq_oneLpNum, temp, temp, NULL);
+      mpq_clear(temp);
     }
-    // printf("Adding variable %d to QSopt_ex LP problem\n", v);
-    // print_simplex_var(stdout, solver, v);
-    free_vars++;
 
-    get_bound(solver, v, true, &lb);
-    get_bound(solver, v, false, &ub);
-
-    qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
-    qsx->var_to_col[v] = mpq_QSget_colcount(prob);
-    mpq_QSnew_col(prob, mpq_oneLpNum, lb.is_finite ? lb.val : mpq_NINFTY,
-                  ub.is_finite ? ub.val : mpq_INFTY, NULL);
-
-    bound_type_clear(&lb);
-    bound_type_clear(&ub);
+    // If the variable is not free, or fixed, it is an auxiliary variable.
+    // We will encode those as rows later.
   }
+}
+
+typedef struct row_data_s {
+  int *col_idxs;
+  mpq_t *values;
+  int row_idx;
+  int col_idxs_idx;
+  int values_idx;
+} row_data_t;
+
+static int monomials_to_row(simplex_solver_t *const solver,
+                            const qsx_t *const qsx, const thvar_t v,
+                            row_data_t *const row_data,
+                            const rational_t *const p_coeff) {
+
+  const int row_idx = row_data->row_idx;
+  int num_non_zeros = 0;
+  const polynomial_t *const p = arith_var_poly_def(&solver->vtbl, v);
+  assert(p);
+
+  for (uint32_t i = 0; i < p->nterms; i++) {
+    const monomial_t *const mono = &p->mono[i];
+    const thvar_t x = mono->var;
+
+    rational_t temp_coeff;
+    q_init(&temp_coeff);
+    if (p_coeff != NULL) {
+      q_set(&temp_coeff, &mono->coeff);
+      q_mul(&temp_coeff, p_coeff);
+    }
+    const rational_t *const coeff =
+        p_coeff == NULL ? &mono->coeff : &temp_coeff;
+    assert(!q_is_zero(coeff));
+
+    if (x == const_idx) {
+      // Use the constant to update the right-hand side of the row
+      assert(p->nterms > 1); // Constant with only one term are fixed columns
+      assert(has_any_bound(solver, v));
+      mpq_q_sub(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
+    } else if (var_in_columns(qsx, x)) {
+      assert(arith_var_is_free(&solver->vtbl, x));
+      // Add var coefficient
+      num_non_zeros++;
+      row_data->col_idxs[row_data->col_idxs_idx++] = qsx->var_to_col[x];
+      init_and_copy_to_gmp(row_data->values[row_data->values_idx++], coeff);
+    } else {
+      assert(arith_var_def_is_poly(&solver->vtbl, x));
+      num_non_zeros += monomials_to_row(solver, qsx, x, row_data, coeff);
+    }
+
+    q_clear(&temp_coeff);
+  }
+
+  return num_non_zeros;
 }
 
 /**
@@ -171,47 +255,49 @@ static void add_cols(simplex_solver_t *const solver, const qsx_t *const qsx) {
  * @param[out] qsx the QSopt_ex LP problem to which the rows will be added
  */
 static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
-  static bound_type_t lb, ub;
-
   mpq_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_aux];
   int begin_row_idx[qsx->n_aux];
   int col_idxs[(solver->vtbl.nvars - qsx->n_aux - 1) * qsx->n_aux];
   mpq_t values[(solver->vtbl.nvars - qsx->n_aux - 1) * qsx->n_aux];
 
-  int32_t row_idx = 0, non_zero_per_row_idx = 0, col_idxs_idx = 0,
-          values_idx = 0;
+  int32_t non_zero_per_row_idx = 0;
+
+  row_data_t row_data = {.col_idxs = col_idxs,
+                         .values = values,
+                         .row_idx = 0,
+                         .col_idxs_idx = 0,
+                         .values_idx = 0};
 
   // Add rows to the LP problem
   const int32_t n_vars = (int32_t)solver->vtbl.nvars;
   for (thvar_t v = 0; v < n_vars; v++) {
+    const int r = row_data.row_idx;
     // Skip structural variables and constants
-    if (!arith_var_def_is_poly(&solver->vtbl, v)) {
+    if (!arith_var_def_is_poly(&solver->vtbl, v) || var_in_columns(qsx, v)) {
       continue;
     }
 
-    const polynomial_t *const p = arith_var_poly_def(&solver->vtbl, v);
-    assert(p != NULL);
-
     // where the non-zero columns of the row are stored
-    begin_row_idx[row_idx] = col_idxs_idx;
+    begin_row_idx[r] = row_data.col_idxs_idx;
 
     // TODO: may be unnecessary if 'R' sense is not used
-    mpq_set(qsx->range[row_idx], mpq_zeroLpNum);
+    mpq_set(qsx->range[r], mpq_zeroLpNum);
 
     // Add row range
+    bound_type_t lb, ub;
     get_bound(solver, v, true, &lb);
     get_bound(solver, v, false, &ub);
 
     if (lb.is_finite && ub.is_finite) // Bounded
     {
-      mpq_set(qsx->rhs[row_idx], lb.val);
-      mpq_set(qsx->range[row_idx], ub.val);
-      mpq_sub(qsx->range[row_idx], qsx->range[row_idx], qsx->rhs[row_idx]);
+      mpq_set(qsx->rhs[r], lb.val);
+      mpq_set(qsx->range[r], ub.val);
+      mpq_sub(qsx->range[r], qsx->range[r], qsx->rhs[r]);
       if (__smt2_globals.epsilon_mode && lb.is_strict) {
-        mpq_sub(qsx->range[row_idx], qsx->range[row_idx], epsilon);
+        mpq_sub(qsx->range[r], qsx->range[r], epsilon);
       }
-      qsx->sense[row_idx] = 'R';
+      qsx->sense[r] = 'R';
       // printf("Adding bounded row %d with lower bound %s and upper bound
       // %s\n", row_idx, mpq_get_str(NULL, 10, d_rhs[row_idx]),
       // mpq_get_str(NULL, 10, d_range[row_idx]));
@@ -219,72 +305,42 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
     {
       // printf("Adding lower bounded row %d with lower bound %s\n", row_idx,
       // mpq_get_str(NULL, 10, lb.val));
-      mpq_set(qsx->rhs[row_idx], lb.val);
-      qsx->sense[row_idx] = 'G';
+      mpq_set(qsx->rhs[r], lb.val);
+      qsx->sense[r] = 'G';
     } else if (ub.is_finite) // Only upper bound
     {
       // printf("Adding upper bounded row %d with upper bound %s\n", row_idx,
       //        mpq_get_str(NULL, 10, ub.val));
-      mpq_set(qsx->rhs[row_idx], ub.val);
-      qsx->sense[row_idx] = 'L';
+      mpq_set(qsx->rhs[r], ub.val);
+      qsx->sense[r] = 'L';
     } else // Unbounded
     {
       // printf("Adding unbounded row %d\n", row_idx);
-      mpq_set(qsx->rhs[row_idx], mpq_NINFTY);
-      qsx->sense[row_idx] = 'G';
+      mpq_set(qsx->rhs[r], mpq_NINFTY);
+      qsx->sense[r] = 'G';
       // printf("Unbounded variable %d\n", v);
     }
 
     bound_type_clear(&lb);
     bound_type_clear(&ub);
 
-    int num_non_zeros = 0;
-    for (uint32_t i = 0; i < p->nterms; i++) {
-      const monomial_t *const mono = &p->mono[i];
-      const thvar_t x = mono->var;
-      const rational_t *coeff = &mono->coeff;
-
-      if (x == const_idx) {
-        // printf("Adding constant term to row %d\n", row_idx);
-        sub_to_gmp(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
-#ifndef NDEBUG
-        get_bound(solver, v, true, &lb);
-        get_bound(solver, v, false, &ub);
-        assert(lb.is_finite || ub.is_finite);
-        bound_type_clear(&lb);
-        bound_type_clear(&ub);
-#endif
-      } else {
-        assert(arith_var_is_free(&solver->vtbl, x));
-        // Add var coefficient
-        num_non_zeros++;
-        col_idxs[col_idxs_idx++] = qsx->var_to_col[x];
-        init_and_copy_to_gmp(values[values_idx++], coeff);
-      }
-    }
+    const int num_non_zeros = monomials_to_row(solver, qsx, v, &row_data, NULL);
 
     // For each row, we set the number of non-zero coefficients
     // (i.e., the size of the row)
     non_zero_per_row[non_zero_per_row_idx++] = num_non_zeros;
 
     // Add the new row to the map
-    qsx->row_to_var[row_idx] = v;
-    qsx->var_to_row[v] = row_idx++;
+    qsx->row_to_var[r] = v;
+    qsx->var_to_row[v] = r;
+    row_data.row_idx++;
   }
-
-  // print_int_vector(col_idxs, col_idxs_idx, "col_idxs");
-  // print_int_vector(non_zero_per_row, non_zero_per_row_idx,
-  // "non_zero_per_row"); print_int_vector(begin_row_idx, row_idx,
-  // "begin_row_idx"); print_mpq_vector(d_range, row_idx, "d_range");
-  // print_mpq_vector(values, values_idx, "values");
-  // print_mpq_vector(d_rhs, row_idx, "d_rhs");
-  // print_char_vector(d_sense, row_idx, "d_sense");
 
   mpq_QSadd_ranged_rows(prob, non_zero_per_row_idx, non_zero_per_row,
                         begin_row_idx, col_idxs, values, qsx->rhs, qsx->sense,
                         qsx->range, NULL);
 
-  mpq_vector_clear(values, values_idx);
+  mpq_vector_clear(values, row_data.values_idx);
 }
 
 static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
@@ -296,7 +352,7 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
 
   if (var_status == QS_COL_BSTAT_BASIC)
     int_bvset_add(&sol->b_vars, v);
-  else if (var_status != QS_COL_BSTAT_BASIC)
+  else
     int_bvset_add(&sol->nb_vars, v);
 
   switch (var_status) {
@@ -308,9 +364,9 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
     xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
     // Ensure the result is within the bounds of the variable, if any
     if (is_below_lb(solver, v, x + v)) {
-      xq_set(x + v, get_lb(solver, v));
+      sol->bounds[v] = VAR_BOUND_AT_LOWER;
     } else if (is_above_ub(solver, v, x + v)) {
-      xq_set(x + v, get_ub(solver, v));
+      sol->bounds[v] = VAR_BOUND_AT_UPPER;
     }
     assert(!is_above_ub(solver, v, x + v));
     assert(!is_below_lb(solver, v, x + v));
@@ -322,19 +378,36 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
       // Free rows are set to lower bound, so we leave the value as is
       // (there is no lower bound to set them to)
       xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
+      assert(xq_is_zero(sol->x + v));
     } else {
       assert(has_lb(solver, v));
-      xq_set(x + v, get_lb(solver, v));
+      sol->bounds[v] = VAR_BOUND_AT_LOWER;
     }
     break;
   case QS_COL_BSTAT_UPPER:
     assert(has_ub(solver, v));
-    xq_set(x + v, get_ub(solver, v));
+    sol->bounds[v] = VAR_BOUND_AT_UPPER;
     break;
   default:
     printf("Unknown variable status for variable %d: %c\n", v, var_status);
     exit(1);
   }
+}
+
+static void row_value_to_solution(const qsx_t *const qsx,
+                                  const external_solution_t *const sol,
+                                  const int r) {
+  const thvar_t v = qsx->row_to_var[r];
+  mpq_t rhs;
+  mpq_init(rhs);
+  mpq_set(rhs, qsx->rhs[r]);
+  if (qsx->sense[r] == 'L') {
+    mpq_sub(rhs, rhs, qsx->y[r]);
+  } else {
+    mpq_add(rhs, rhs, qsx->y[r]);
+  }
+  xq_set_mpq_prenormalize(sol->x + v, rhs);
+  mpq_clear(rhs);
 }
 
 static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
@@ -346,25 +419,15 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
 
   if (var_status == QS_COL_BSTAT_BASIC)
     int_bvset_add(&sol->b_vars, v);
-  else if (var_status != QS_COL_BSTAT_BASIC)
+  else
     int_bvset_add(&sol->nb_vars, v);
 
-  mpq_t rhs;
   switch (var_status) {
   // If we are dealing with a basic variable, we necessarily need to get its
   // value from the solved problem.
   case QS_COL_BSTAT_BASIC:
   case QS_COL_BSTAT_FREE: // Shared with basic
-    mpq_init(rhs);
-    mpq_set(rhs, qsx->rhs[r]);
-    if (qsx->sense[r] == 'L') {
-      mpq_sub(rhs, rhs, qsx->y[r]);
-    } else {
-      mpq_add(rhs, rhs, qsx->y[r]);
-    }
-    xq_set_mpq_prenormalize(sol->x + v, rhs);
-    mpq_clear(rhs);
-
+    row_value_to_solution(qsx, sol, r);
     if (is_below_lb(solver, v, x + v)) {
       bounds[v] = VAR_BOUND_AT_LOWER;
     } else if (is_above_ub(solver, v, x + v)) {
@@ -378,15 +441,7 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
     if (!has_any_bound(solver, v)) {
       // Free rows are set to lower bound, so we leave the value as is
       // (there is no lower bound to set them to)
-      mpq_init(rhs);
-      mpq_set(rhs, qsx->rhs[r]);
-      if (qsx->sense[r] == 'L') {
-        mpq_sub(rhs, rhs, qsx->y[r]);
-      } else {
-        mpq_add(rhs, rhs, qsx->y[r]);
-      }
-      xq_set_mpq_prenormalize(sol->x + v, rhs);
-      mpq_clear(rhs);
+      row_value_to_solution(qsx, sol, r);
     } else {
       if (qsx->sense[r] == 'G' || qsx->sense[r] == 'R') {
         assert(has_lb(solver, v));
@@ -395,8 +450,8 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
         assert(has_ub(solver, v));
         bounds[v] = VAR_BOUND_AT_UPPER;
       } else {
-        printf("Unknown sense for row %d: %c\n", r, qsx->sense[r]);
-        exit(1);
+        assert(qsx->sense[r] == 'E');
+        row_value_to_solution(qsx, sol, r);
       }
     }
     break;

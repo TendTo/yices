@@ -35,7 +35,8 @@ xrational_t *get_ub(simplex_solver_t *solver, thvar_t x);
 
 void init_and_copy_to_gmp(mpq_t dest, const rational_t *src);
 void copy_to_gmp(mpq_t dest, const rational_t *src);
-void sub_to_gmp(mpq_t dest, mpq_t src, const rational_t *subtrahend);
+void mpq_q_sub(mpq_t dest, mpq_t a, const rational_t *b);
+void mpq_q_mul(mpq_t dest, mpq_t a, const rational_t *b);
 
 void mpq_vector_clear(mpq_t v[], int n);
 
