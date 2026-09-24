@@ -709,6 +709,8 @@ show-details:
 	@ echo "  PIC_GMP_INCLUDE_DIR = $(PIC_GMP_INCLUDE_DIR)"
 	@ echo
 	@ echo "  ENABLE_MCSAT = $(ENABLE_MCSAT)"
+	@ echo "  ENABLE_QSOPTEX = $(ENABLE_QSOPTEX)"
+	@ echo "  ENABLE_SOPLEX = $(ENABLE_SOPLEX)"
 	@ echo
 	@ echo "  STATIC_LIBPOLY = $(STATIC_LIBPOLY)"
 	@ echo "  STATIC_LIBPOLY_INCLUDE_DIR = $(STATIC_LIBPOLY_INCLUDE_DIR)"

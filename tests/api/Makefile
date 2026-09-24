@@ -99,6 +99,21 @@ ifeq ($(ENABLE_MCSAT),yes)
 endif
 
 #
+# Whether we have support for qsoptex
+#
+ifeq ($(ENABLE_QSOPTEX),yes)
+  CPPFLAGS+=-DHAVE_QSOPTEX
+endif
+
+#
+# Whether we have support for soplex
+#
+ifeq ($(ENABLE_SOPLEX),yes)
+  CPPFLAGS+=-DHAVE_SOPLEX
+endif
+
+
+#
 # Whether we have thread safety
 # If so on Unix systems, we must add -pthread to CFLAGS
 #

@@ -209,7 +209,6 @@ core_src_c := \
 	solvers/simplex/arith_atomtable.c \
 	solvers/simplex/arith_vartable.c \
 	solvers/simplex/diophantine_systems.c \
-	solvers/simplex/external_qsoptex.c \
 	solvers/simplex/external_simplex.c \
 	solvers/simplex/gomory_cuts.c \
 	solvers/simplex/integrality_constraints.c \
@@ -409,7 +408,13 @@ mcsat_src_c := \
 	mcsat/l2o/hill_climbing.c \
 	mcsat/options.c
 
+# optional: qsoptex solver
+qsoptex_src_c := \
+	solvers/simplex/external_qsoptex.c
 
+# optional: soplex solver
+soplex_src_c := \
+	solvers/simplex/external_soplex.c
 
 #
 # Fake mcsat module: do nothing. Used to make the compilation go through.
@@ -494,6 +499,20 @@ base_src_c := $(core_src_c) $(mcsat_src_c)
 else
 base_src_c := $(core_src_c) $(no_mcsat_src_c)
 endif
+
+#
+# base: core + qsoptex if QSOPTEX is enabled or core + fake qsoptex
+#
+ifeq ($(ENABLE_QSOPTEX),yes)
+base_src_c := $(base_src_c) $(qsoptex_src_c)
+endif
+#
+# base: core + soplex if SOPLEX is enabled or core + fake soplex
+#
+ifeq ($(ENABLE_SOPLEX),yes)
+base_src_c := $(base_src_c) $(soplex_src_c)
+endif
+
 
 #
 # all sources: base + extra
@@ -645,6 +664,21 @@ endif
 ifeq ($(ENABLE_MCSAT),yes)
   CPPFLAGS += -DHAVE_MCSAT
 endif
+
+#
+# Whether we have support for qsoptex
+#
+ifeq ($(ENABLE_QSOPTEX),yes)
+  CPPFLAGS+=-DHAVE_QSOPTEX
+endif
+
+#
+# Whether we have support for soplex
+#
+ifeq ($(ENABLE_SOPLEX),yes)
+  CPPFLAGS+=-DHAVE_SOPLEX
+endif
+
 
 #
 # Whether we have thread safety

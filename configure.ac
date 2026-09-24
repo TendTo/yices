@@ -196,6 +196,8 @@ AC_ARG_ENABLE([qsoptex],
       AC_MSG_NOTICE([Enabling support for QSopt_ex])
     fi],
    [])
+ENABLE_QSOPTEX="$use_qsoptex"
+AC_SUBST(ENABLE_QSOPTEX)
 
 dnl
 dnl Options for SoPlex and the libpoly library
@@ -210,6 +212,8 @@ AC_ARG_ENABLE([soplex],
       AC_MSG_NOTICE([Enabling support for SoPlex])
     fi],
    [])
+ENABLE_SOPLEX="$use_soplex"
+AC_SUBST(ENABLE_SOPLEX)
 
 
 
