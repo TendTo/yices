@@ -77,7 +77,7 @@ external_import_status_t import_external_solution(simplex_solver_t *solver,
                                                   external_solution_t *sol);
 
 // TODO: REMOVE ALL DEBUG PRINTS
-inline void print_int_vector(const int32_t v[], const int n, const char *name) {
+static inline void print_int_vector(const int32_t v[], const int n, const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
     return;
@@ -92,7 +92,7 @@ inline void print_int_vector(const int32_t v[], const int n, const char *name) {
   printf("]\n");
 }
 
-inline void print_mpq_vector(const mpq_t v[], const int n, const char *name) {
+static inline void print_mpq_vector(const mpq_t v[], const int n, const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
     return;
@@ -107,7 +107,7 @@ inline void print_mpq_vector(const mpq_t v[], const int n, const char *name) {
   printf("]\n");
 }
 
-inline void print_rational_vector(const rational_t v[], const int n,
+static inline void print_rational_vector(const rational_t v[], const int n,
                                   const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
@@ -123,7 +123,7 @@ inline void print_rational_vector(const rational_t v[], const int n,
   printf("]\n");
 }
 
-inline void print_xrational_vector(xrational_t v[], const int n,
+static inline void print_xrational_vector(xrational_t v[], const int n,
                                    const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
@@ -139,7 +139,7 @@ inline void print_xrational_vector(xrational_t v[], const int n,
   printf("]\n");
 }
 
-inline void print_char_vector(const char v[], const int n, const char *name) {
+static inline void print_char_vector(const char v[], const int n, const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
     return;
@@ -154,7 +154,7 @@ inline void print_char_vector(const char v[], const int n, const char *name) {
   printf("]\n");
 }
 
-inline void print_external_solution(external_solution_t *sol) {
+static inline void print_external_solution(external_solution_t *sol) {
   printf("external_solution_t {\n");
   switch (sol->status) {
   case EXTERNAL_SIMPLEX_FEASIBLE:
@@ -191,7 +191,7 @@ inline void print_external_solution(external_solution_t *sol) {
   printf("}\n");
 }
 
-inline void print_int_heap(const int_heap_t *heap) {
+static inline void print_int_heap(const int_heap_t *heap) {
   if (heap == NULL) {
     printf("int_heap: NULL\n");
     return;
