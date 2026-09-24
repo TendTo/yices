@@ -241,8 +241,8 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
   mpq_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_aux];
   int begin_row_idx[qsx->n_aux];
-  int col_idxs[(solver->vtbl.nvars - qsx->n_aux - 1) * qsx->n_aux];
-  mpq_t values[(solver->vtbl.nvars - qsx->n_aux - 1) * qsx->n_aux];
+  int *const col_idxs = safe_malloc(sizeof(int) * qsx->n_struct * qsx->n_aux);
+  mpq_t *const values = safe_malloc(sizeof(mpq_t) * qsx->n_struct * qsx->n_aux);
 
   int32_t non_zero_per_row_idx = 0;
 
@@ -323,6 +323,8 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
                         qsx->range, NULL);
 
   mpq_vector_clear(values, row_data.values_idx);
+  safe_free(col_idxs);
+  safe_free(values);
 }
 
 static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
@@ -350,8 +352,6 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
     } else if (is_above_ub(solver, v, x + v)) {
       sol->bounds[v] = VAR_BOUND_AT_UPPER;
     }
-    assert(!is_above_ub(solver, v, x + v));
-    assert(!is_below_lb(solver, v, x + v));
     break;
     // For non-basic variables we know the value is at a bound
     // and we can use the d_vars/proper LP bounds directly
