@@ -40,7 +40,7 @@ void mpq_q_mul(mpq_t dest, mpq_t a, const rational_t *b);
 
 void mpq_vector_clear(mpq_t v[], int n);
 
-external_import_status_t
+external_simplex_status_t
 simplex_check_feasibility_external(simplex_solver_t *solver);
 
 bool is_strict_var_zero(mpq_t x);
@@ -159,9 +159,6 @@ inline void print_external_solution(external_solution_t *sol) {
   switch (sol->status) {
   case EXTERNAL_SIMPLEX_FEASIBLE:
     printf("  status: OPTIMAL\n");
-    break;
-  case EXTERNAL_SIMPLEX_UNBOUNDED:
-    printf("  status: UNBOUNDED\n");
     break;
   case EXTERNAL_SIMPLEX_INFEASIBLE:
     printf("  status: INFEASIBLE\n");

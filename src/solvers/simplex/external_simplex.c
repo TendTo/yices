@@ -161,10 +161,10 @@ static void update_nb_value(simplex_solver_t *const solver,
     break;
   default:
     if (!xq_eq(sol->x + v, arith_var_value(&solver->vtbl, v))) {
-      // TODO: explore the possibility of breaking the invariant
-      //  that non-basic variables are at a bound
-      printf("ERROR: Variable %d has unknown bound\n", v);
-      exit(1);
+      // We are dealing with a free variable.
+      // Just assign it the value from the solution.
+      assert(!has_any_bound(solver, v));
+      update_non_basic_var_value(solver, v, sol->x + v);
     }
   }
 }
@@ -242,10 +242,12 @@ static bool alignment_pivot(simplex_solver_t *const solver,
   case VAR_BOUND_AT_LOWER:
     update_to_lower_bound(solver, v);
     assert(value_satisfies_bounds(solver, v));
+    assert(variable_at_lower_bound(solver, v));
     return true;
   case VAR_BOUND_AT_UPPER:
     update_to_upper_bound(solver, v);
     assert(value_satisfies_bounds(solver, v));
+    assert(variable_at_upper_bound(solver, v));
     return true;
   case VAR_BOUND_UNKNOWN:
     // If we are dealing with a free variable, just assign it the value from sol
@@ -282,7 +284,7 @@ import_external_solution(simplex_solver_t *const solver,
 
 #ifndef NDEBUG
   for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
-    if (matrix_is_nonbasic_var(matrix, v)) {
+    if (matrix_is_nonbasic_var(matrix, v) && int_bvset_member(new_nb, v)) {
       assert(value_satisfies_bounds(solver, v));
       assert(variable_at_lower_bound(solver, v) ||
              variable_at_upper_bound(solver, v) || !has_any_bound(solver, v));
@@ -373,7 +375,7 @@ import_external_solution(simplex_solver_t *const solver,
   }
 
   delete_int_bvset(&missing_nb_vars);
-  return EXTERNAL_IMPORT_UNKNOWN;
+  return EXTERNAL_IMPORT_INFEASIBLE;
 }
 
 bool has_lb(const simplex_solver_t *const solver, const thvar_t v) {
@@ -427,28 +429,30 @@ void mpq_vector_clear(mpq_t v[], const int n) {
 }
 
 bool is_strict_var_zero(mpq_t x) {
-  return __smt2_globals.delta < 0 && __smt2_globals.epsilon_mode &&
+  return __smt2_globals.delta < 0 && !__smt2_globals.epsilon_mode &&
          mpq_cmp_ui(x, 0, 1) == 0;
 }
 
-external_import_status_t
+external_simplex_status_t
 simplex_check_feasibility_external(simplex_solver_t *solver) {
   if (!solver->tableau_ready)
-    return EXTERNAL_IMPORT_UNKNOWN;
+    return EXTERNAL_SIMPLEX_UNKNOWN;
 
   solver->stats.external_calls++;
 
-  // printf("\n\n*** SIMPLEX START ***\n");
-  // print_simplex_vars_summary(stdout, solver);
-  // printf("==== Pivots ====\n");
-  // printf("%d", solver->stats.num_pivots);
-  // printf("\n==== Simplex variables ====\n");
-  // print_simplex_vars(stdout, solver);
-  // printf("\n==== Tableau ====\n");
-  // print_simplex_matrix(stdout, solver);
-  // printf("\n==== Bounds  ====\n");
-  // print_simplex_bounds(stdout, solver);
-  // printf("\n");
+#if 0
+  printf("\n\n*** SIMPLEX START ***\n");
+  print_simplex_vars_summary(stdout, solver);
+  printf("==== Pivots ====\n");
+  printf("%d", solver->stats.num_pivots);
+  printf("\n==== Simplex variables ====\n");
+  print_simplex_vars(stdout, solver);
+  printf("\n==== Tableau ====\n");
+  print_simplex_matrix(stdout, solver);
+  printf("\n==== Bounds  ====\n");
+  print_simplex_bounds(stdout, solver);
+  printf("\n");
+#endif
 
   external_solution_t solution = new_external_solution(solver->vtbl.nvars);
   switch (__smt2_globals.external_lp_solver) {
@@ -467,9 +471,16 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
 
   // printf("\n==== Solution ====\n");
   // print_external_solution(&solution);
-  const external_import_status_t status =
-      import_external_solution(solver, &solution);
-  external_solution_clear(&solution);
+  const external_simplex_status_t status = solution.status;
+  switch (status) {
+  case EXTERNAL_SIMPLEX_INFEASIBLE:
+  case EXTERNAL_SIMPLEX_FEASIBLE:
+    import_external_solution(solver, &solution);
+    break;
+  default:
+    break;
+  }
 
+  external_solution_clear(&solution);
   return status;
 }

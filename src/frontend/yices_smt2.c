@@ -148,7 +148,7 @@ static int32_t ef_ematch_cnstr_mode;
 static int32_t ef_ematch_term_mode;
 
 static char* external_lp_solver;
-static bool is_strict;
+static bool is_epsilon_mode;
 static double delta;
 static uint32_t pivot_threshold;
 
@@ -457,7 +457,7 @@ static void parse_command_line(int argc, char *argv[]) {
   ef_ematch_term_mode = -1;
 
   external_lp_solver = "";
-  is_strict = false;
+  is_epsilon_mode = false;
   delta = -1.0;
   pivot_threshold = -1;
 
@@ -525,7 +525,7 @@ static void parse_command_line(int argc, char *argv[]) {
         break;
 
       case epsilon_opt:
-        is_strict = true;
+        is_epsilon_mode = true;
         break;
 
       case delta_opt:
@@ -1244,7 +1244,7 @@ int main(int argc, char *argv[]) {
   if (delta != -1.0) {
     smt2_set_delta(delta);
   }
-  if (is_strict) {
+  if (is_epsilon_mode) {
     smt2_set_epsilon_mode(true);
   }
   smt2_set_pivot_threshold(pivot_threshold);

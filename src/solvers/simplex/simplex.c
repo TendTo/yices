@@ -4087,7 +4087,8 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   uint32_t repeats, loops, bthreshold;
   bool feasible;
   bool invoked_external_solver;
-  external_import_status_t status;
+  external_simplex_status_t status;
+  uint32_t pivots;
 
 #if TRACE
   printf("---> SIMPLEX: CHECK FEASIBILITY\n");
@@ -4105,8 +4106,9 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   repeats = 0;
   solver->use_blands_rule = false;
   loops = 0;
+  pivots = 0;
   invoked_external_solver = false;
-  status = EXTERNAL_IMPORT_UNKNOWN;
+  status = EXTERNAL_SIMPLEX_UNKNOWN;
 
   /*
    * Bland threshold: adjust it based on the number of variables
@@ -4132,7 +4134,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
       }
     }
 
-    if (solver->stats.num_pivots >= __smt2_globals.pivot_threshold && !invoked_external_solver) {
+    if (pivots >= __smt2_globals.pivot_threshold && !invoked_external_solver) {
       invoked_external_solver = true;
       status = simplex_check_feasibility_external(solver);
     }
@@ -4166,6 +4168,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
         matrix_pivot(matrix, r, k);
         update_to_lower_bound(solver, x);
         solver->stats.num_pivots ++;
+        pivots++;
         solver->stats.adjustment_pivots += invoked_external_solver ? 1 : 0;
       }
 
@@ -4184,6 +4187,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
         matrix_pivot(matrix, r, k);
         update_to_upper_bound(solver, x);
         solver->stats.num_pivots ++;
+        pivots++;
         solver->stats.adjustment_pivots += invoked_external_solver ? 1 : 0;
       }
     }
@@ -4230,13 +4234,11 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   }
 #endif
 
-  if (invoked_external_solver) {
-    if ((feasible && status == EXTERNAL_IMPORT_FEASIBLE)
-      || (!feasible && status == EXTERNAL_IMPORT_INFEASIBLE)) {
-      solver->stats.external_success++;
-    } else {
-      solver->stats.external_failure++;
-    }
+  if ((feasible && status == EXTERNAL_SIMPLEX_FEASIBLE)
+    || (!feasible && status == EXTERNAL_SIMPLEX_INFEASIBLE)) {
+    solver->stats.external_success++;
+  } else if (invoked_external_solver) {
+    solver->stats.external_failure++;
   }
 
   return feasible;
