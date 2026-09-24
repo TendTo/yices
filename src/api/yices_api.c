@@ -115,6 +115,10 @@
 typedef void lp_algebraic_number_t;
 #endif
 
+#ifdef HAVE_QSOPTEX
+#include "solvers/simplex/external_qsoptex.h"
+#endif
+
 
 #include "mt/thread_macros.h"
 
@@ -1100,6 +1104,12 @@ EXPORTED void yices_init(void) {
   root_terms = NULL;
   root_types = NULL;
 
+#ifdef HAVE_QSOPTEX
+
+#endif
+#ifdef HAVE_SOPLEX
+
+#endif
 }
 
 
@@ -1146,6 +1156,13 @@ EXPORTED void yices_exit(void) {
   cleanup_bvconstants();
 
   free_yices_error();
+
+#ifdef HAVE_QSOPTEX
+  global_qsx_clear();
+#endif
+#ifdef HAVE_SOPLEX
+
+#endif
 }
 
 

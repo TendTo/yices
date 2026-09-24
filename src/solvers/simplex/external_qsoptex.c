@@ -7,31 +7,53 @@
  */
 #include "external_qsoptex.h"
 
+#ifndef HAVE_QSOPTEX
+#error "QSopt_ex library is not available. Please install it to use this feature."
+#endif
+
 #include "frontend/smt2/smt2_commands.h"
 #include "io/term_printer.h"
+#include "qsopt_ex/QSopt_ex.h"
 #include "solvers/simplex/external_simplex.h"
 #include "solvers/simplex/simplex_types.h"
 #include "utils/memalloc.h"
 #include <stdbool.h>
 
+typedef struct {
+  mpq_QSprob prob;     ///< The QSopt_ex LP problem
+  SolverStatus status; ///< Status of the LP problem after solving
+
+  thvar_t *col_to_var; ///< Map from column index in the LP to theory var
+  thvar_t *row_to_var; ///< Map from row index in the LP to theory var
+
+  int32_t *var_to_col; ///< Map from theory var to column index in the LP
+  int32_t *var_to_row; ///< Map from theory var to row index in the LP
+
+  int32_t n_struct; ///< Number of structural variables
+  int32_t n_aux;    ///< Number of auxiliary variables
+
+  mpq_t *rhs;    ///< Right-hand side of the constraints
+  mpq_t *range;  ///< Range of the constraints
+  char *sense;   ///< Sense of the constraints ('E', 'G', 'L', or 'R')
+  mpq_t *x;      ///< Temporary rational for storing the solution
+  mpq_t *y;      ///< Temporary rational for storing the dual solution
+  QSbasis basis; ///< Basis information for the solution
+} qsx_t;
+
 static const int pivot_threshold = 10000;
 static bool qsx_started = false;
-static mpq_t epsilon;
 
 static void global_qsx_start() {
   if (qsx_started)
     return;
   qsx_started = true;
   QSexactStart();
-  mpq_init(epsilon);
-  mpq_set_ui(epsilon, 1, 1000000);
 }
 
-static void global_qsx_clear() {
+void global_qsx_clear() {
   if (!qsx_started)
     return;
   QSexactClear();
-  mpq_clear(epsilon);
   qsx_started = false;
 }
 
@@ -128,12 +150,6 @@ static void qsx_clear(qsx_t *const qsx) {
   safe_free(qsx->range);
   safe_free(qsx->rhs);
   safe_free(qsx->sense);
-  global_qsx_clear();
-}
-
-static mpq_ptr qsx_get_y(mpq_QSprob prob, const int rowIdx) {
-  assert(prob && prob->lp && prob->lp->pIpiz);
-  return prob->lp->pIpiz[rowIdx];
 }
 
 /**
@@ -303,8 +319,14 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
       qsx->sense[r] = 'L';
     } else // Unbounded row
     {
+#if 1
+      bound_type_clear(&lb);
+      bound_type_clear(&ub);
+      continue;
+#else
       mpq_set(qsx->rhs[r], mpq_NINFTY);
       qsx->sense[r] = 'G';
+#endif
     }
 
     bound_type_clear(&lb);
@@ -534,12 +556,12 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   mpq_clear(delta);
 }
 
-void qsx_solve(simplex_solver_t *solver, external_solution_t *solution) {
+void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   qsx_t qsx;
   qsx_init(&qsx);
   qsx_init_vars(solver, &qsx);
   qsx_build_problem(solver, &qsx);
-  qsx_solve_lp(solver, &qsx, solution);
-  extract_solution(solver, &qsx, solution);
+  qsx_solve_lp(solver, &qsx, sol);
+  extract_solution(solver, &qsx, sol);
   qsx_clear(&qsx);
 }
