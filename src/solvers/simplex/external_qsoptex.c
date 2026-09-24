@@ -8,7 +8,8 @@
 #include "external_qsoptex.h"
 
 #ifndef HAVE_QSOPTEX
-#error "QSopt_ex library is not available. Please install it to use this feature."
+#error                                                                         \
+    "QSopt_ex library is not available. Please install it to use this feature."
 #endif
 
 #include "frontend/smt2/smt2_commands.h"
@@ -477,11 +478,12 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
 static void extract_solution(simplex_solver_t *solver, qsx_t *qsx,
                              external_solution_t *sol) {
   const mpq_QSprob *prob = &qsx->prob;
-  [[maybe_unused]] const int status = qsx->status;
 
-  assert(status == QS_LP_OPTIMAL || status == QS_LP_DELTA_OPTIMAL ||
-         status == QS_LP_FEASIBLE || status == QS_LP_DELTA_FEASIBLE ||
-         status == QS_LP_UNBOUNDED || status == QS_LP_INFEASIBLE);
+  // The external solver did not find a valid solution
+  if (sol->status != EXTERNAL_SIMPLEX_FEASIBLE &&
+      sol->status != EXTERNAL_SIMPLEX_INFEASIBLE) {
+    return;
+  }
 
   for (int col_idx = 0; col_idx < mpq_QSget_colcount(*prob); col_idx++) {
     extract_col_value(solver, qsx, sol, col_idx);
@@ -548,7 +550,8 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
     solution->status = EXTERNAL_SIMPLEX_EXHAUSTED;
     break;
   default:
-    printf("QSopt_ex returned an unexpected status: %d\n", qsx->status);
+    trace_printf(solver->core->trace, 10,
+                 "QSopt_ex returned an unexpected status: %d\n", qsx->status);
     solution->status = EXTERNAL_SIMPLEX_ERROR;
     break;
   }
