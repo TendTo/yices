@@ -274,13 +274,18 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
 
     if (lb.is_finite && ub.is_finite) // Bounded
     {
-      mpq_set(qsx->rhs[r], lb.val);
-      mpq_set(qsx->range[r], ub.val);
-      mpq_sub(qsx->range[r], qsx->range[r], qsx->rhs[r]);
-      if (__smt2_globals.epsilon_mode && lb.is_strict) {
-        mpq_sub(qsx->range[r], qsx->range[r], epsilon);
+      if (mpq_equal(lb.val, ub.val)) {
+        mpq_set(qsx->rhs[r], lb.val);
+        qsx->sense[r] = 'E';
+      } else {
+        mpq_set(qsx->rhs[r], lb.val);
+        mpq_set(qsx->range[r], ub.val);
+        mpq_sub(qsx->range[r], qsx->range[r], qsx->rhs[r]);
+        if (__smt2_globals.epsilon_mode && lb.is_strict) {
+          mpq_sub_si(qsx->range[r], epsilon_num, epsilon_den);
+        }
+        qsx->sense[r] = 'R';
       }
-      qsx->sense[r] = 'R';
       // printf("Adding bounded row %d with lower bound %s and upper bound
       // %s\n", row_idx, mpq_get_str(NULL, 10, d_rhs[row_idx]),
       // mpq_get_str(NULL, 10, d_range[row_idx]));
@@ -292,7 +297,7 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
       qsx->sense[r] = 'G';
     } else if (ub.is_finite) // Only upper bound
     {
-      // printf("Adding upper bounded row %d with upper bound %s\n", row_idx,
+      // printf("Adding upper bounded row %d with upper bound %s\n", r,
       //        mpq_get_str(NULL, 10, ub.val));
       mpq_set(qsx->rhs[r], ub.val);
       qsx->sense[r] = 'L';
@@ -347,9 +352,9 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
     // Start by setting the current basic result
     xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
     // Ensure the result is within the bounds of the variable, if any
-    if (is_below_lb(solver, v, x + v)) {
+    if (is_below_or_eq_lb(solver, v, x + v)) {
       sol->bounds[v] = VAR_BOUND_AT_LOWER;
-    } else if (is_above_ub(solver, v, x + v)) {
+    } else if (is_above_or_eq_ub(solver, v, x + v)) {
       sol->bounds[v] = VAR_BOUND_AT_UPPER;
     }
     break;
@@ -410,9 +415,9 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
   case QS_COL_BSTAT_BASIC:
   case QS_COL_BSTAT_FREE: // Shared with basic
     row_value_to_solution(qsx, sol, r);
-    if (is_below_lb(solver, v, x + v)) {
+    if (is_below_or_eq_lb(solver, v, x + v)) {
       bounds[v] = VAR_BOUND_AT_LOWER;
-    } else if (is_above_ub(solver, v, x + v)) {
+    } else if (is_above_or_eq_ub(solver, v, x + v)) {
       bounds[v] = VAR_BOUND_AT_UPPER;
     }
     break;
@@ -433,7 +438,7 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
         bounds[v] = VAR_BOUND_AT_UPPER;
       } else {
         assert(qsx->sense[r] == 'E');
-        row_value_to_solution(qsx, sol, r);
+        bounds[v] = VAR_BOUND_AT_LOWER;
       }
     }
     break;
@@ -468,15 +473,17 @@ static void qsx_build_problem(simplex_solver_t *const solver,
                               qsx_t *const qsx) {
   add_cols(solver, qsx);
   add_rows(solver, qsx);
-  // mpq_QSdump_prob(qsx->prob);
-  // static int i = '0';
-  // char filename[256];
-  // snprintf(
-  //     filename, sizeof(filename),
-  //     "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/qsproblem_%c.lp",
-  //     i);
-  // mpq_QSwrite_prob(qsx->prob, filename, "LP");
-  // i++;
+#if 0
+  mpq_QSdump_prob(qsx->prob);
+  static int i = 0;
+  char filename[256];
+  snprintf(
+      filename, sizeof(filename),
+      "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/qsproblem_%d.lp",
+      i);
+  mpq_QSwrite_prob(qsx->prob, filename, "LP");
+  i++;
+#endif
 }
 
 static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,

@@ -27,8 +27,8 @@ bool has_any_bound(const simplex_solver_t *solver, thvar_t v);
 bool has_strict_lb(const simplex_solver_t *solver, thvar_t v);
 bool has_strict_ub(const simplex_solver_t *solver, thvar_t v);
 
-bool is_below_lb(simplex_solver_t *solver, thvar_t x, xrational_t *value);
-bool is_above_ub(simplex_solver_t *solver, thvar_t x, xrational_t *value);
+bool is_below_or_eq_lb(simplex_solver_t *solver, thvar_t x, xrational_t *value);
+bool is_above_or_eq_ub(simplex_solver_t *solver, thvar_t x, xrational_t *value);
 
 xrational_t *get_lb(simplex_solver_t *solver, thvar_t x);
 xrational_t *get_ub(simplex_solver_t *solver, thvar_t x);

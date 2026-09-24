@@ -35,8 +35,6 @@
 #include <assert.h>
 #include <qsopt_ex/QSopt_ex.h>
 
-static mpq_t epsilon;
-
 external_solution_t new_external_solution(const uint32_t nvars) {
   external_solution_t sol;
   external_solution_init(&sol, nvars);
@@ -137,9 +135,9 @@ void get_bound(const simplex_solver_t *const solver, const thvar_t v,
   if (__smt2_globals.epsilon_mode && bound->is_strict) {
     // Adjust the bounds with epsilon
     if (is_lower_bound) {
-      mpq_add(bound->val, bound->val, epsilon);
+      mpq_add_si(bound->val, epsilon_num, epsilon_den);
     } else {
-      mpq_sub(bound->val, bound->val, epsilon);
+      mpq_sub_si(bound->val, epsilon_num, epsilon_den);
     }
   }
 }
@@ -316,8 +314,10 @@ import_external_solution(simplex_solver_t *const solver,
     }
   }
 
+  bool performed_pivot = true;
   while (n_missing_nb_vars > 0 &&
-         !int_heap_is_empty(&solver->infeasible_vars)) {
+         !int_heap_is_empty(&solver->infeasible_vars) && !performed_pivot) {
+    performed_pivot = false;
 
     // Go over all variables that we need to add to the basis
     thvar_t v = 0;
@@ -337,6 +337,7 @@ import_external_solution(simplex_solver_t *const solver,
 
         n_missing_nb_vars--;
         int_bvset_remove(&missing_nb_vars, v);
+        performed_pivot = true;
         break;
       }
     }
@@ -400,16 +401,16 @@ bool has_strict_ub(const simplex_solver_t *const solver, const thvar_t v) {
   return ub_idx > -1 && !xq_is_rational(&solver->bstack.bound[ub_idx]);
 }
 
-bool is_below_lb(simplex_solver_t *const solver, const thvar_t x,
-                 xrational_t *const value) {
+bool is_below_or_eq_lb(simplex_solver_t *const solver, const thvar_t x,
+                       xrational_t *const value) {
   const int32_t k = arith_var_lower_index(&solver->vtbl, x);
-  return k >= 0 && xq_gt(solver->bstack.bound + k, value);
+  return k >= 0 && xq_lt(value, solver->bstack.bound + k);
 }
 
-bool is_above_ub(simplex_solver_t *const solver, const thvar_t x,
-                 xrational_t *const value) {
+bool is_above_or_eq_ub(simplex_solver_t *const solver, const thvar_t x,
+                       xrational_t *const value) {
   const int32_t k = arith_var_upper_index(&solver->vtbl, x);
-  return k >= 0 && xq_lt(solver->bstack.bound + k, value);
+  return k >= 0 && xq_gt(value, solver->bstack.bound + k);
 }
 
 xrational_t *get_lb(simplex_solver_t *const solver, const thvar_t x) {
