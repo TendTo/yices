@@ -58,13 +58,17 @@ static bool var_in_columns(const qsx_t *const qsx, const thvar_t v) {
 }
 
 static bool var_is_valid_column(arith_vartable_t *const vtbl, const thvar_t v) {
-  if (arith_var_is_free(vtbl, v) || arith_var_def_is_rational(vtbl, v))
+  if (arith_var_is_free(vtbl, v))
     return true;
+  return false;
+}
+
+static bool var_is_valid_row(arith_vartable_t *const vtbl, const thvar_t v) {
   if (!arith_var_def_is_poly(vtbl, v))
     return false;
   const polynomial_t *const p = arith_var_poly_def(vtbl, v);
   assert(p);
-  return p->nterms == 1 && p->mono[0].var == const_idx;
+  return !(p->nterms == 1 && p->mono[0].var == const_idx);
 }
 
 static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
@@ -75,7 +79,7 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   // and the number of structural variables,
   // which is equal to the columns of the LP problem.
   for (thvar_t v = 0; v < nvars; v++) {
-    if (arith_var_def_is_poly(&solver->vtbl, v)) {
+    if (var_is_valid_row(&solver->vtbl, v)) {
       qsx->n_aux++;
     } else if (var_is_valid_column(&solver->vtbl, v)) {
       qsx->n_struct++;
@@ -151,7 +155,7 @@ static void add_cols(simplex_solver_t *const solver, const qsx_t *const qsx) {
   for (thvar_t v = 0; v < num_vars; v++) {
 
     // Free variables. They come from the SMT input. Encode them as columns.
-    if (arith_var_is_free(&solver->vtbl, v)) {
+    if (var_is_valid_column(&solver->vtbl, v)) {
       bound_type_t lb, ub;
       get_bound(solver, v, true, &lb);
       get_bound(solver, v, false, &ub);
@@ -163,32 +167,9 @@ static void add_cols(simplex_solver_t *const solver, const qsx_t *const qsx) {
 
       bound_type_clear(&lb);
       bound_type_clear(&ub);
-    } else if (arith_var_def_is_poly(&solver->vtbl, v)) {
-      polynomial_t *p = arith_var_poly_def(&solver->vtbl, v);
-      assert(p);
-      if (p->nterms == 1 && p->mono[0].var == const_idx) {
-        // This is a constant variable.
-        // To ensure it is accounted for, we can encode it as a fixed variable
-        const rational_t *coeff = &p->mono[0].coeff;
-        mpq_t temp;
-        init_and_copy_to_gmp(temp, coeff);
-        qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
-        qsx->var_to_col[v] = mpq_QSget_colcount(prob);
-        mpq_QSnew_col(prob, mpq_oneLpNum, temp, temp, NULL);
-        mpq_clear(temp);
-      }
-    } else if (arith_var_def_is_rational(&solver->vtbl, v)) {
-      // This is a rational variable. We can encode it as a fixed variable
-      const rational_t *coeff = arith_var_rational_def(&solver->vtbl, v);
-      mpq_t temp;
-      init_and_copy_to_gmp(temp, coeff);
-      qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
-      qsx->var_to_col[v] = mpq_QSget_colcount(prob);
-      mpq_QSnew_col(prob, mpq_oneLpNum, temp, temp, NULL);
-      mpq_clear(temp);
     }
 
-    // If the variable is not free, or fixed, it is an auxiliary variable.
+    // If the variable is not free, it is an auxiliary variable.
     // We will encode those as rows later.
   }
 }
@@ -204,7 +185,8 @@ typedef struct row_data_s {
 static int monomials_to_row(simplex_solver_t *const solver,
                             const qsx_t *const qsx, const thvar_t v,
                             row_data_t *const row_data,
-                            const rational_t *const p_coeff) {
+                            const rational_t *const p_coeff,
+                            const bool bounded) {
 
   const int row_idx = row_data->row_idx;
   int num_non_zeros = 0;
@@ -228,17 +210,18 @@ static int monomials_to_row(simplex_solver_t *const solver,
     if (x == const_idx) {
       // Use the constant to update the right-hand side of the row
       assert(p->nterms > 1); // Constant with only one term are fixed columns
-      assert(has_any_bound(solver, v));
-      mpq_q_sub(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
+      if (bounded)
+        mpq_q_sub(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
     } else if (var_in_columns(qsx, x)) {
-      assert(arith_var_is_free(&solver->vtbl, x));
+      assert(var_is_valid_column(&solver->vtbl, x));
       // Add var coefficient
       num_non_zeros++;
       row_data->col_idxs[row_data->col_idxs_idx++] = qsx->var_to_col[x];
       init_and_copy_to_gmp(row_data->values[row_data->values_idx++], coeff);
     } else {
       assert(arith_var_def_is_poly(&solver->vtbl, x));
-      num_non_zeros += monomials_to_row(solver, qsx, x, row_data, coeff);
+      num_non_zeros +=
+          monomials_to_row(solver, qsx, x, row_data, coeff, bounded);
     }
 
     q_clear(&temp_coeff);
@@ -274,7 +257,7 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
   for (thvar_t v = 0; v < n_vars; v++) {
     const int r = row_data.row_idx;
     // Skip structural variables and constants
-    if (!arith_var_def_is_poly(&solver->vtbl, v) || var_in_columns(qsx, v)) {
+    if (!var_is_valid_row(&solver->vtbl, v)) {
       continue;
     }
 
@@ -313,18 +296,17 @@ static void add_rows(simplex_solver_t *const solver, const qsx_t *const qsx) {
       //        mpq_get_str(NULL, 10, ub.val));
       mpq_set(qsx->rhs[r], ub.val);
       qsx->sense[r] = 'L';
-    } else // Unbounded
+    } else // Unbounded row
     {
-      // printf("Adding unbounded row %d\n", row_idx);
       mpq_set(qsx->rhs[r], mpq_NINFTY);
       qsx->sense[r] = 'G';
-      // printf("Unbounded variable %d\n", v);
     }
 
     bound_type_clear(&lb);
     bound_type_clear(&ub);
 
-    const int num_non_zeros = monomials_to_row(solver, qsx, v, &row_data, NULL);
+    const int num_non_zeros = monomials_to_row(solver, qsx, v, &row_data, NULL,
+                                               lb.is_finite || ub.is_finite);
 
     // For each row, we set the number of non-zero coefficients
     // (i.e., the size of the row)
@@ -467,8 +449,8 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
 
 static void extract_solution(simplex_solver_t *solver, qsx_t *qsx,
                              external_solution_t *sol) {
-  const SolverStatus status = qsx->status;
   const mpq_QSprob *prob = &qsx->prob;
+  [[maybe_unused]] const int status = qsx->status;
 
   assert(status == QS_LP_OPTIMAL || status == QS_LP_DELTA_OPTIMAL ||
          status == QS_LP_FEASIBLE || status == QS_LP_DELTA_FEASIBLE ||
