@@ -30,8 +30,8 @@ typedef struct {
   int32_t *var_to_col; ///< Map from theory var to column index in the LP
   int32_t *var_to_row; ///< Map from theory var to row index in the LP
 
-  int32_t n_struct; ///< Number of structural variables
-  int32_t n_aux;    ///< Number of auxiliary variables
+  int32_t n_cols; ///< Number of estimated LP columns
+  int32_t n_rows; ///< Number of estimated LP rows
 
   mpq_t *rhs;    ///< Right-hand side of the constraints
   mpq_t *range;  ///< Range of the constraints
@@ -157,21 +157,21 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
     }
   }
 
-  qsx->col_to_var = safe_malloc(qsx->n_struct * sizeof(thvar_t));
-  qsx->row_to_var = safe_malloc(qsx->n_aux * sizeof(thvar_t));
+  qsx->col_to_var = safe_malloc(qsx->n_cols * sizeof(thvar_t));
+  qsx->row_to_var = safe_malloc(qsx->n_rows * sizeof(thvar_t));
   qsx->var_to_col = safe_malloc(nvars * sizeof(uint32_t));
   qsx->var_to_row = safe_malloc(nvars * sizeof(uint32_t));
-  qsx->x = safe_malloc(qsx->n_struct * sizeof(mpq_t));
-  qsx->y = safe_malloc(qsx->n_aux * sizeof(mpq_t));
-  qsx->range = safe_malloc(qsx->n_aux * sizeof(mpq_t));
-  qsx->rhs = safe_malloc(qsx->n_aux * sizeof(mpq_t));
-  qsx->sense = safe_malloc(qsx->n_aux * sizeof(char));
+  qsx->x = safe_malloc(qsx->n_cols * sizeof(mpq_t));
+  qsx->y = safe_malloc(qsx->n_rows * sizeof(mpq_t));
+  qsx->range = safe_malloc(qsx->n_rows * sizeof(mpq_t));
+  qsx->rhs = safe_malloc(qsx->n_rows * sizeof(mpq_t));
+  qsx->sense = safe_malloc(qsx->n_rows * sizeof(char));
 
-  for (uint32_t i = 0; i < qsx->n_struct; i++) {
+  for (uint32_t i = 0; i < qsx->n_cols; i++) {
     qsx->col_to_var[i] = -1;
     mpq_init(qsx->x[i]);
   }
-  for (uint32_t i = 0; i < qsx->n_aux; i++) {
+  for (uint32_t i = 0; i < qsx->n_rows; i++) {
     qsx->row_to_var[i] = -1;
     mpq_init(qsx->y[i]);
     mpq_init(qsx->range[i]);
@@ -190,10 +190,10 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
 static void qsx_clear(qsx_t *const qsx) {
   basis_clear(&qsx->basis);
   mpq_QSfree_prob(qsx->prob);
-  mpq_vector_clear(qsx->x, qsx->n_struct);
-  mpq_vector_clear(qsx->y, qsx->n_aux);
-  mpq_vector_clear(qsx->range, qsx->n_aux);
-  mpq_vector_clear(qsx->rhs, qsx->n_aux);
+  mpq_vector_clear(qsx->x, qsx->n_cols);
+  mpq_vector_clear(qsx->y, qsx->n_rows);
+  mpq_vector_clear(qsx->range, qsx->n_rows);
+  mpq_vector_clear(qsx->rhs, qsx->n_rows);
   safe_free(qsx->col_to_var);
   safe_free(qsx->row_to_var);
   safe_free(qsx->var_to_col);
@@ -334,10 +334,10 @@ static int monomials_to_row(simplex_solver_t *const solver,
 static void add_rows_epsilon(simplex_solver_t *const solver,
                              const qsx_t *const qsx) {
   mpq_QSprob prob = qsx->prob;
-  int non_zero_per_row[qsx->n_aux];
-  int begin_row_idx[qsx->n_aux];
-  int *const col_idxs = safe_malloc(sizeof(int) * qsx->n_struct * qsx->n_aux);
-  mpq_t *const values = safe_malloc(sizeof(mpq_t) * qsx->n_struct * qsx->n_aux);
+  int non_zero_per_row[qsx->n_rows];
+  int begin_row_idx[qsx->n_rows];
+  int *const col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows);
+  mpq_t *const values = safe_malloc(sizeof(mpq_t) * qsx->n_cols * qsx->n_rows);
 
   int32_t non_zero_per_row_idx = 0;
 
@@ -603,6 +603,8 @@ static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
 
 /**
  * Builds the LP encoding for the epsilon-mode simplex problem.
+ * @note `add_cols_epsilon` must be called before `add_rows_epsilon`, since
+ * the latter depends on the column indices being populated first.
  * @param solver The simplex solver whose structural variables and constraints
  * define the LP.
  * @param qsx The QSopt_ex wrapper to populate with columns and rows.
