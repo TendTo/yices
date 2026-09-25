@@ -313,6 +313,7 @@ static void qsx_clear(qsx_t *const qsx) {
  */
 static void add_cols_epsilon(simplex_solver_t *const solver,
                              const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
   mpq_QSprob prob = qsx->prob;
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
@@ -348,6 +349,60 @@ typedef struct row_data_s {
   int values_idx;
 } row_data_t;
 
+typedef struct row_accumulator_s {
+  mpq_t *values;
+  int *values_idxs;
+  int n_values;
+} row_accumulator_t;
+
+static void row_accumulator_init(row_accumulator_t *const accumulator,
+                                 const int n_cols) {
+  accumulator->values = safe_malloc(n_cols * sizeof(mpq_t));
+  memset(accumulator->values, 0, n_cols * sizeof(mpq_t));
+  accumulator->values_idxs = safe_malloc(n_cols * sizeof(int));
+  accumulator->n_values = 0;
+}
+
+static void row_accumulator_clear(row_accumulator_t *const accumulator,
+                                  const bool clear_mpqs) {
+  if (clear_mpqs) {
+    for (int i = 0; i < accumulator->n_values; i++) {
+      mpq_clear(accumulator->values[accumulator->values_idxs[i]]);
+    }
+  }
+  safe_free(accumulator->values);
+  safe_free(accumulator->values_idxs);
+  accumulator->values = NULL;
+  accumulator->values_idxs = NULL;
+  accumulator->n_values = 0;
+}
+
+static void row_accumulator_add_mpq(row_accumulator_t *const accumulator,
+                                    const int col_idx, const mpq_t value) {
+  if (accumulator->values[col_idx]->_mp_num._mp_d == NULL) {
+    mpq_init(accumulator->values[col_idx]);
+    mpq_set(accumulator->values[col_idx], value);
+    accumulator->values_idxs[accumulator->n_values++] = col_idx;
+  } else {
+    mpq_add(accumulator->values[col_idx], accumulator->values[col_idx], value);
+  }
+}
+
+static void row_accumulator_add_q(row_accumulator_t *const accumulator,
+                                  const int col_idx, const rational_t *value) {
+  if (is_ratgmp(value)) {
+    row_accumulator_add_mpq(accumulator, col_idx, get_gmp(value));
+  } else {
+    if (accumulator->values[col_idx]->_mp_num._mp_d == NULL) {
+      mpq_init(accumulator->values[col_idx]);
+      mpq_set_si(accumulator->values[col_idx], get_num(value), get_den(value));
+      accumulator->values_idxs[accumulator->n_values++] = col_idx;
+    } else {
+      mpq_add_si(accumulator->values[col_idx], get_num(value), get_den(value));
+    }
+  }
+}
+
 /**
  * Expands a polynomial-defined arithmetic variable into the sparse row data
  * used by QSopt_ex. The function recursively walks the polynomial, adds any
@@ -358,19 +413,17 @@ typedef struct row_data_s {
  * @param qsx The QSopt_ex wrapper holding the column and row mappings.
  * @param v The theory variable whose polynomial contribution is being emitted.
  * @param row_data Aggregated row data that stores column indices and values.
+ * @param accumulator Optional accumulator to collect non-zero coefficients for
+ * the row.
  * @param p_coeff Optional parent coefficient to multiply into this polynomial.
- * @param bounded Indicates whether the row is bounded and therefore should
- * subtract constant terms from the matching RHS entry.
  * @return The number of non-zero coefficients added to the row.
  */
-static int monomials_to_row(simplex_solver_t *const solver,
-                            const qsx_t *const qsx, const thvar_t v,
-                            row_data_t *const row_data,
-                            const rational_t *const p_coeff,
-                            const bool bounded) {
-
+static void monomials_to_row(simplex_solver_t *const solver,
+                             const qsx_t *const qsx, const thvar_t v,
+                             row_data_t *const row_data,
+                             row_accumulator_t *const accumulator,
+                             const rational_t *const p_coeff) {
   const int row_idx = row_data->row_idx;
-  int num_non_zeros = 0;
   const polynomial_t *const p = arith_var_poly_def(&solver->vtbl, v);
   assert(p);
 
@@ -390,24 +443,42 @@ static int monomials_to_row(simplex_solver_t *const solver,
 
     if (x == const_idx) {
       // Use the constant to update the right-hand side of the row
-      assert(p->nterms > 1); // Constant with only one term are fixed columns
-      if (bounded)
-        mpq_q_sub(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
+      assert(p->nterms > 1); // Constant with only one term are ignored
+      assert(has_any_bound(solver, v));
+      mpq_q_sub(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
     } else if (var_in_columns(qsx, x)) {
       assert(var_is_valid_column(solver, x));
       // Add var coefficient
-      num_non_zeros++;
-      row_data->col_idxs[row_data->col_idxs_idx++] = qsx->var_to_col[x];
-      init_and_copy_to_gmp(row_data->values[row_data->values_idx++], coeff);
+      row_accumulator_add_q(accumulator, qsx->var_to_col[x], coeff);
     } else {
       assert(arith_var_def_is_poly(&solver->vtbl, x));
-      num_non_zeros +=
-          monomials_to_row(solver, qsx, x, row_data, coeff, bounded);
+      monomials_to_row(solver, qsx, x, row_data, accumulator, coeff);
     }
 
     q_clear(&temp_coeff);
   }
+}
 
+static int polynomial_to_row(simplex_solver_t *const solver,
+                             const qsx_t *const qsx, const thvar_t v,
+                             row_data_t *const row_data) {
+  row_accumulator_t accumulator;
+  row_accumulator_init(&accumulator, qsx->n_cols);
+  monomials_to_row(solver, qsx, v, row_data, &accumulator, NULL);
+  const int num_non_zeros = accumulator.n_values;
+
+  for (int i = 0; i < num_non_zeros; i++) {
+    const int col_idx = accumulator.values_idxs[i];
+    row_data->col_idxs[row_data->col_idxs_idx++] = col_idx;
+    // Transfer ownership to the row_data values array
+    memcpy(row_data->values[row_data->values_idx++],
+           accumulator.values[col_idx], sizeof(mpq_t));
+  }
+
+  // We do not need to clear the mpq_t values in the accumulator
+  // because they have been assigned to the row_data values array,
+  // which will be cleared later.
+  row_accumulator_clear(&accumulator, false);
   return num_non_zeros;
 }
 
@@ -572,29 +643,29 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
  */
 static void add_rows_epsilon(simplex_solver_t *const solver,
                              const qsx_t *const qsx) {
+  assert(qsx->n_rows > 0);
   mpq_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_rows];
   int begin_row_idx[qsx->n_rows];
-  int *const col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows);
-  mpq_t *const values = safe_malloc(sizeof(mpq_t) * qsx->n_cols * qsx->n_rows);
 
-  row_data_t row_data = {.col_idxs = col_idxs,
-                         .values = values,
-                         .row_idx = 0,
-                         .col_idxs_idx = 0,
-                         .values_idx = 0};
+  row_data_t rd = {
+      .col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows),
+      .values = safe_malloc(sizeof(mpq_t) * qsx->n_cols * qsx->n_rows),
+      .row_idx = 0,
+      .col_idxs_idx = 0,
+      .values_idx = 0};
 
   // Add rows to the LP problem
   const int32_t n_vars = (int32_t)solver->vtbl.nvars;
   for (thvar_t v = 0; v < n_vars; v++) {
-    const int r = row_data.row_idx;
+    const int r = rd.row_idx;
     // Skip structural variables and constants
     if (!var_is_valid_row(solver, v)) {
       continue;
     }
 
     // where the non-zero columns of the row are stored
-    begin_row_idx[r] = row_data.col_idxs_idx;
+    begin_row_idx[r] = rd.col_idxs_idx;
 
     // TODO: may be unnecessary if 'R' sense is not used
     mpq_set(qsx->range[r], mpq_zeroLpNum);
@@ -633,23 +704,15 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
       //        mpq_get_str(NULL, 10, ub.val));
       mpq_set(qsx->rhs[r], ub.val);
       qsx->sense[r] = 'L';
-    } else // Unbounded row
+    } else // Unbounded row, which should be filtered out
     {
-#if 1
-      bound_type_clear(&lb);
-      bound_type_clear(&ub);
-      continue;
-#else
-      mpq_set(qsx->rhs[r], mpq_NINFTY);
-      qsx->sense[r] = 'G';
-#endif
+      assert(false);
     }
 
     bound_type_clear(&lb);
     bound_type_clear(&ub);
 
-    const int num_non_zeros = monomials_to_row(solver, qsx, v, &row_data, NULL,
-                                               lb.is_finite || ub.is_finite);
+    const int num_non_zeros = polynomial_to_row(solver, qsx, v, &rd);
 
     // For each row, we set the number of non-zero coefficients
     // (i.e., the size of the row)
@@ -658,16 +721,16 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
     // Add the new row to the map
     qsx->row_to_var[r] = v;
     qsx->var_to_row[v] = r;
-    row_data.row_idx++;
+    rd.row_idx++;
   }
 
-  mpq_QSadd_ranged_rows(prob, row_data.row_idx, non_zero_per_row, begin_row_idx,
-                        col_idxs, values, qsx->rhs, qsx->sense, qsx->range,
-                        NULL);
+  mpq_QSadd_ranged_rows(prob, rd.row_idx, non_zero_per_row, begin_row_idx,
+                        rd.col_idxs, rd.values, qsx->rhs, qsx->sense,
+                        qsx->range, NULL);
 
-  mpq_vector_clear(values, row_data.values_idx);
-  safe_free(col_idxs);
-  safe_free(values);
+  mpq_vector_clear(rd.values, rd.values_idx);
+  safe_free(rd.col_idxs);
+  safe_free(rd.values);
 }
 
 /**
@@ -718,6 +781,7 @@ static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
  * @param qsx The QSopt_ex wrapper that would receive the strict-mode columns.
  */
 static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
   mpq_QSprob prob = qsx->prob;
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
@@ -758,6 +822,7 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
  * @param qsx The QSopt_ex wrapper that would receive the strict-mode rows.
  */
 static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
+  assert(qsx->n_rows > 0);
   mpq_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_rows];
   int begin_row_idx[qsx->n_rows];
@@ -778,6 +843,7 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
         !var_is_valid_strict_column(solver, v)) {
       continue;
     }
+    assert(has_any_bound(solver, v));
 
     // Add a strict constraint for each strict bound around a free variable
     if (var_is_valid_strict_column(solver, v)) {
@@ -842,20 +908,7 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
     get_bound(solver, v, true, &lb);
     get_bound(solver, v, false, &ub);
 
-    if (!lb.is_finite && !ub.is_finite) // Unbounded row
-    {
-#if 1
-      bound_type_clear(&lb);
-      bound_type_clear(&ub);
-      continue;
-#else
-      mpq_set(qsx->rhs[rd.row_idx], mpq_NINFTY);
-      qsx->sense[rd.row_idx] = 'G';
-#endif
-    }
-
-    const int num_non_zeros = monomials_to_row(solver, qsx, v, &rd, NULL,
-                                               lb.is_finite || ub.is_finite);
+    const int num_non_zeros = polynomial_to_row(solver, qsx, v, &rd);
 
     // For each row, we set the number of non-zero coefficients
     // (i.e., the size of the row)
@@ -964,6 +1017,8 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   }
 
 #if 0
+  printf("Strict-mode LP has %d rows and %d columns\n", qsx->n_rows,
+         qsx->n_cols);
   printf("Added %d rows to the strict-mode LP\n", rd.row_idx);
   print_int_vector(non_zero_per_row, rd.row_idx, "Non-zero per row");
   print_int_vector(begin_row_idx, rd.row_idx, "Begin row index");
@@ -998,30 +1053,6 @@ static void qsx_build_problem_strict(simplex_solver_t *const solver,
 }
 
 /**
- * Placeholder extractor for strict-mode structural variable values.
- * @param solver The simplex solver corresponding to the variable bounds.
- * @param qsx The solved QSopt_ex problem.
- * @param sol The output solution to populate.
- * @param c The LP column index to extract.
- */
-static void extract_col_value_strict(simplex_solver_t *const solver,
-                                     qsx_t *const qsx,
-                                     external_solution_t *const sol,
-                                     const int c) {}
-
-/**
- * Placeholder extractor for strict-mode auxiliary row values.
- * @param solver The simplex solver corresponding to the row bounds.
- * @param qsx The solved QSopt_ex problem.
- * @param sol The output solution to populate.
- * @param r The LP row index to extract.
- */
-static void extract_row_value_strict(simplex_solver_t *const solver,
-                                     qsx_t *const qsx,
-                                     external_solution_t *const sol,
-                                     const int r) {}
-
-/**
  * Extracts every value from a strict-mode LP solution into the external result.
  * @param solver The simplex solver defining the model.
  * @param qsx The solved QSopt_ex problem.
@@ -1033,8 +1064,10 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
   const int strict_var_idx = qsx->n_cols;
   bool is_strict_basic = qsx->basis.cstat[strict_var_idx] == QS_COL_BSTAT_BASIC;
 
-  if (is_strict_basic && q_is_pos(&sol->x[strict_var_idx].main)) {
-    int res = mpq_QSchange_bound(qsx->prob, strict_var_idx, 'U', mpq_zeroLpNum);
+  // TODO: we may skip ensuring that the strict variable is 0 entirely
+  if (is_strict_basic && mpq_is_pos(qsx->x[strict_var_idx])) {
+    [[maybe_unused]] int res =
+        mpq_QSchange_bound(qsx->prob, strict_var_idx, 'U', mpq_zeroLpNum);
     assert(res == 0);
 
     mpq_t delta;
@@ -1160,6 +1193,14 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   qsx_t qsx;
   qsx_init(&qsx);
   qsx_init_vars(solver, &qsx);
+
+  // Edge case: empty problem, feasible by definition
+  if (qsx.n_cols == 0 || qsx.n_rows == 0) {
+    sol->status = EXTERNAL_SIMPLEX_FEASIBLE;
+    qsx_clear(&qsx);
+    return;
+  }
+
   if (__smt2_globals.epsilon_mode)
     qsx_build_problem_epsilon(solver, &qsx);
   else
