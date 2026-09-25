@@ -45,21 +45,41 @@ static const int pivot_threshold = 10000;
 static bool qsx_started = false;
 
 /**
- * Check if a theory variable has been added to the LP problem as a column.
- * @param qsx The QSopt_ex LP problem
- * @param v The theory variable to check
- * @return true if the variable is in the columns, false otherwise
+ * Checks whether a theory variable is already represented as a column in the
+ * QSopt_ex problem.
+ * @param qsx The QSopt_ex problem wrapper containing column-to-variable maps.
+ * @param v The theory variable to inspect.
+ * @return true if the variable has a mapped column index; otherwise false.
  */
 static bool var_in_columns(const qsx_t *const qsx, const thvar_t v) {
   return qsx->var_to_col[v] != -1;
 }
 
+/**
+ * Determines whether a theory variable may be encoded as a structural column in
+ * the LP model.
+ * We only care about free variables, i.e., those that appear
+ * in the SMT definition.
+ * @param vtbl The arithmetic variable table containing the variable definition.
+ * @param v The theory variable to inspect.
+ * @return true if the variable is free; otherwise false.
+ */
 static bool var_is_valid_column(arith_vartable_t *const vtbl, const thvar_t v) {
   if (arith_var_is_free(vtbl, v))
     return true;
   return false;
 }
 
+/**
+ * Determines whether a theory variable should be encoded as an auxiliary row in
+ * the LP model.
+ * We only care about polynomials that are not constants.
+ * E.g., p := a.x or p := a.x + c, but not p := c, where c is a constant.
+ * @param vtbl The arithmetic variable table containing the variable definition.
+ * @param v The theory variable to inspect.
+ * @return true if the variable is a polynomial-defined non-constant row; false
+ * otherwise.
+ */
 static bool var_is_valid_row(arith_vartable_t *const vtbl, const thvar_t v) {
   if (!arith_var_def_is_poly(vtbl, v))
     return false;
@@ -68,6 +88,11 @@ static bool var_is_valid_row(arith_vartable_t *const vtbl, const thvar_t v) {
   return !(p->nterms == 1 && p->mono[0].var == const_idx);
 }
 
+/**
+ * Initializes the global QSopt_ex runtime if it has not already been started.
+ * This function is idempotent and ensures the underlying QSopt_ex exact solver
+ * is initialized before building or solving LP problems.
+ */
 static void global_qsx_start() {
   if (qsx_started)
     return;
@@ -82,6 +107,11 @@ void global_qsx_clear() {
   qsx_started = false;
 }
 
+/**
+ * Releases any previously allocated basis metadata for a QSopt_ex LP instance.
+ * @param basis The basis structure whose internal arrays should be freed and
+ * reset.
+ */
 static void basis_clear(QSbasis *const basis) {
   safe_free(basis->cstat);
   safe_free(basis->rstat);
@@ -91,6 +121,10 @@ static void basis_clear(QSbasis *const basis) {
   basis->nrows = 0;
 }
 
+/**
+ * Creates a new QSopt_ex LP problem wrapper and configures solver parameters.
+ * @param qsx The wrapper to initialize.
+ */
 static void qsx_init(qsx_t *qsx) {
   global_qsx_start();
   memset(qsx, 0, sizeof(qsx_t));
@@ -100,6 +134,14 @@ static void qsx_init(qsx_t *qsx) {
                   __smt2_globals.verbosity);
 }
 
+/**
+ * Allocates the QSopt_ex column/row mappings and temporary numeric arrays for a
+ * simplex solver.
+ * @param solver The simplex solver whose arithmetic variables will be
+ * translated to LP variables.
+ * @param qsx The QSopt_ex wrapper that receives the allocated arrays and
+ * indexes.
+ */
 static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   const uint32_t nvars = solver->vtbl.nvars;
 
@@ -141,6 +183,10 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   }
 }
 
+/**
+ * Frees all memory owned by a QSopt_ex wrapper and clears the stored basis.
+ * @param qsx The QSopt_ex wrapper to destroy.
+ */
 static void qsx_clear(qsx_t *const qsx) {
   basis_clear(&qsx->basis);
   mpq_QSfree_prob(qsx->prob);
@@ -160,14 +206,15 @@ static void qsx_clear(qsx_t *const qsx) {
 }
 
 /**
- * Loop over all the theory variables in the solver and add them as columns to
- * the LP problem in QSopt_ex, having care of setting the appropriate lower and
- * upper bounds for each variable.
- * The bounds, if finite, are listed in the solver's bstack, and are converted
- * to mpq_t as needed.
- * @param solver the simplex solver containing the variables and their bounds
- * @param[out] qsx the QSopt_ex LP problem to which the columns will be
- * added
+ * Adds all free arithmetic variables as structural columns in the QSopt_ex LP.
+ * Each variable that is valid as a column is assigned the corresponding finite
+ * or infinite lower/upper bounds from the simplex solver, and the mapping
+ * arrays in @p qsx are updated so later row-building logic can refer back to
+ * the original theory variable identifiers. In epsilon mode, any strict bound
+ * is made stricter by using an hardcoded value @f \epsilon @f.
+ * @param solver The simplex solver containing the variable bounds and
+ * definitions.
+ * @param qsx The QSopt_ex problem wrapper receiving the new columns.
  */
 static void add_cols_epsilon(simplex_solver_t *const solver,
                              const qsx_t *const qsx) {
@@ -206,6 +253,21 @@ typedef struct row_data_s {
   int values_idx;
 } row_data_t;
 
+/**
+ * Expands a polynomial-defined arithmetic variable into the sparse row data
+ * used by QSopt_ex. The function recursively walks the polynomial, adds any
+ * coefficient with a structural variable to the current row, and folds
+ * constants into the row RHS when the row is bounded. This allows an SMT
+ * arithmetic relation to be converted into a single LP row.
+ * @param solver The simplex solver containing the variable definitions.
+ * @param qsx The QSopt_ex wrapper holding the column and row mappings.
+ * @param v The theory variable whose polynomial contribution is being emitted.
+ * @param row_data Aggregated row data that stores column indices and values.
+ * @param p_coeff Optional parent coefficient to multiply into this polynomial.
+ * @param bounded Indicates whether the row is bounded and therefore should
+ * subtract constant terms from the matching RHS entry.
+ * @return The number of non-zero coefficients added to the row.
+ */
 static int monomials_to_row(simplex_solver_t *const solver,
                             const qsx_t *const qsx, const thvar_t v,
                             row_data_t *const row_data,
@@ -254,12 +316,20 @@ static int monomials_to_row(simplex_solver_t *const solver,
   return num_non_zeros;
 }
 
+#pragma region Epsilon mode
+
 /**
- * Loop over all the rows in the solver and add them as rows to the LP problem
- * in QSopt_ex, having care of setting the appropriate right-hand side and range
- * for each row.
- * @param solver the simplex solver containing the rows
- * @param[out] qsx the QSopt_ex LP problem to which the rows will be added
+ * Adds all valid arithmetic row definitions from the simplex solver to the
+ * QSopt_ex LP as ranged rows.
+ * For each accepted auxiliary variable, the function translates the bound state
+ * into the row RHS, sense and range, then fills in the sparse coefficient
+ * matrix produced by @ref monomials_to_row.
+ * We ignore constant rows (e.g., p := c)
+ * and unbounded rows (e.g., p: ... with -inf < p < inf).
+ * In epsilon mode, any strict constraint is made stricter
+ * by using an hardcoded value @f \epsilon @f.
+ * @param solver The simplex solver containing the row definitions and bounds.
+ * @param qsx The QSopt_ex LP wrapper receiving the encoded rows.
  */
 static void add_rows_epsilon(simplex_solver_t *const solver,
                              const qsx_t *const qsx) {
@@ -363,6 +433,14 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   safe_free(values);
 }
 
+/**
+ * Extracts the value of a structural variable from the solved QSopt_ex LP and
+ * stores it in the external solution object.
+ * @param solver The simplex solver used to interpret the variable bounds.
+ * @param qsx The solved QSopt_ex problem containing the LP basis and values.
+ * @param sol The destination solution record to update.
+ * @param c The LP column index to extract.
+ */
 static void extract_col_value_epsilon(simplex_solver_t *const solver,
                                       qsx_t *const qsx,
                                       external_solution_t *const sol,
@@ -414,6 +492,14 @@ static void extract_col_value_epsilon(simplex_solver_t *const solver,
   }
 }
 
+/**
+ * Computes the value of an auxiliary row variable from the solved QSopt_ex row
+ * data and stores it in the output solution.
+ * @param qsx The solved QSopt_ex problem that stores the row RHS and dual
+ * values.
+ * @param sol The destination solution object.
+ * @param r The row index to convert back to a theory variable value.
+ */
 static void row_value_to_solution(const qsx_t *const qsx,
                                   const external_solution_t *const sol,
                                   const int r) {
@@ -430,6 +516,14 @@ static void row_value_to_solution(const qsx_t *const qsx,
   mpq_clear(rhs);
 }
 
+/**
+ * Extracts the value of an auxiliary row variable from the solved LP and
+ * updates the bound state in the external solution.
+ * @param solver The simplex solver that defines the row bounds.
+ * @param qsx The solved QSopt_ex problem containing the basis and row data.
+ * @param sol The solution object to populate.
+ * @param r The row index to extract.
+ */
 static void extract_row_value_epsilon(simplex_solver_t *const solver,
                                       qsx_t *const qsx,
                                       external_solution_t *const sol,
@@ -487,6 +581,14 @@ static void extract_row_value_epsilon(simplex_solver_t *const solver,
   }
 }
 
+/**
+ * Extracts every solved value from the epsilon-mode QSopt_ex LP into the
+ * external solution record.
+ * @param solver The simplex solver whose bounds are used to validate each
+ * value.
+ * @param qsx The solved QSopt_ex LP instance to read from.
+ * @param sol The output solution object to populate.
+ */
 static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
                                      external_solution_t *sol) {
   const mpq_QSprob *prob = &qsx->prob;
@@ -499,32 +601,81 @@ static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
   }
 }
 
+/**
+ * Builds the LP encoding for the epsilon-mode simplex problem.
+ * @param solver The simplex solver whose structural variables and constraints
+ * define the LP.
+ * @param qsx The QSopt_ex wrapper to populate with columns and rows.
+ */
 static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
                                       qsx_t *const qsx) {
   add_cols_epsilon(solver, qsx);
   add_rows_epsilon(solver, qsx);
 }
 
+#pragma endregion
+
+#pragma region Strict mode
+
+/**
+ * Reserved placeholder for strict-mode column construction.
+ * This function is intentionally empty because the strict-mode QSopt_ex bridge
+ * is not yet implemented.
+ * @param solver The simplex solver containing the variable definitions.
+ * @param qsx The QSopt_ex wrapper that would receive the strict-mode columns.
+ */
 static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {}
 
+/**
+ * Reserved placeholder for strict-mode row construction.
+ * This function is intentionally empty because the strict-mode QSopt_ex bridge
+ * is not yet implemented.
+ * @param solver The simplex solver containing the row definitions.
+ * @param qsx The QSopt_ex wrapper that would receive the strict-mode rows.
+ */
 static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {}
 
+/**
+ * Builds the strict-mode LP representation used when strict mode is enabled.
+ * @param solver The simplex solver whose constraints define the problem.
+ * @param qsx The QSopt_ex wrapper to populate.
+ */
 static void qsx_build_problem_strict(simplex_solver_t *const solver,
                                      qsx_t *const qsx) {
   add_cols_strict(solver, qsx);
   add_rows_strict(solver, qsx);
 }
 
+/**
+ * Placeholder extractor for strict-mode structural variable values.
+ * @param solver The simplex solver corresponding to the variable bounds.
+ * @param qsx The solved QSopt_ex problem.
+ * @param sol The output solution to populate.
+ * @param c The LP column index to extract.
+ */
 static void extract_col_value_strict(simplex_solver_t *const solver,
                                      qsx_t *const qsx,
                                      external_solution_t *const sol,
                                      const int c) {}
 
+/**
+ * Placeholder extractor for strict-mode auxiliary row values.
+ * @param solver The simplex solver corresponding to the row bounds.
+ * @param qsx The solved QSopt_ex problem.
+ * @param sol The output solution to populate.
+ * @param r The LP row index to extract.
+ */
 static void extract_row_value_strict(simplex_solver_t *const solver,
                                      qsx_t *const qsx,
                                      external_solution_t *const sol,
                                      const int r) {}
 
+/**
+ * Extracts every value from a strict-mode LP solution into the external result.
+ * @param solver The simplex solver defining the model.
+ * @param qsx The solved QSopt_ex problem.
+ * @param sol The output solution to fill.
+ */
 static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
                                     external_solution_t *sol) {
   const mpq_QSprob *prob = &qsx->prob;
@@ -537,6 +688,18 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
   }
 }
 
+#pragma endregion
+
+/**
+ * Solves the current QSopt_ex LP with delta-simplex and records solver status.
+ * The function updates the solver statistics with the precision and delta
+ * values reached during the solve and sets the corresponding external status
+ * code in @p solution.
+ * @param solver The simplex solver collecting performance statistics.
+ * @param qsx The QSopt_ex LP instance to solve.
+ * @param solution The output structure receiving the solved status and variable
+ * count.
+ */
 static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
                          external_solution_t *const solution) {
   const mpq_QSprob *const prob = &qsx->prob;
@@ -586,6 +749,15 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   mpq_clear(delta);
 }
 
+/**
+ * Solves the arithmetic simplex problem using the QSopt_ex backend.
+ * The function initializes a QSopt_ex LP wrapper, encodes the current model in
+ * either epsilon or strict mode, solves it, and, when a feasible or infeasible
+ * result is reported, extracts the variable assignments into the provided
+ * external solution object.
+ * @param solver The simplex solver containing the current arithmetic model.
+ * @param sol The output solution record to be filled with the solve result.
+ */
 void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   qsx_t qsx;
   qsx_init(&qsx);
