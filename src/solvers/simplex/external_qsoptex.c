@@ -17,6 +17,7 @@
 #include "qsopt_ex/QSopt_ex.h"
 #include "solvers/simplex/external_simplex.h"
 #include "solvers/simplex/simplex_types.h"
+#include "utils/cputime.h"
 #include "utils/memalloc.h"
 #include <stdbool.h>
 
@@ -1195,6 +1196,8 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
  * @param sol The output solution record to be filled with the solve result.
  */
 void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
+  const double start_setup = get_cpu_time();
+
   qsx_t qsx;
   qsx_init(&qsx);
   qsx_init_vars(solver, &qsx);
@@ -1224,6 +1227,8 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   mpq_QSwrite_prob(qsx.prob, filename, "LP");
   i++;
 #endif
+  const double start_solve = get_cpu_time();
+
   qsx_solve_lp(solver, &qsx, sol);
   // Only extract a solution if the external solver found a valid one
   if (sol->status == EXTERNAL_SIMPLEX_FEASIBLE ||
@@ -1234,4 +1239,8 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
       extract_solution_strict(solver, &qsx, sol);
   }
   qsx_clear(&qsx);
+
+  const double end_solve = get_cpu_time();
+  solver->stats.external_lp_setup_time += time_diff(start_solve, start_setup);
+  solver->stats.external_lp_run_time += time_diff(end_solve, start_setup);
 }

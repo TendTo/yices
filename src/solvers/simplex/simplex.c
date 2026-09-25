@@ -638,10 +638,17 @@ static void init_simplex_statistics(simplex_stats_t *stat) {
   stat->delta_calls = 0;
   stat->external_calls = 0;
   stat->external_extended_search_count = 0;
-  stat->external_success = 0;
-  stat->external_failure = 0;
+  stat->external_exhausted = 0;
+  stat->external_feasible_correct = 0;
+  stat->external_feasible_incorrect = 0;
+  stat->external_infeasible_correct = 0;
+  stat->external_infeasible_incorrect = 0;
+  stat->external_other = 0;
   stat->adjustment_pivots = 0;
   stat->external_lp_solver = __smt2_globals.external_lp_solver;
+  stat->external_lp_setup_time = 0.0;
+  stat->external_lp_run_time = 0.0;
+  stat->iterative_refinements = 0;
 
   stat->num_make_intfeasible = 0;
   stat->num_bound_conflicts = 0;
@@ -4236,11 +4243,29 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   }
 #endif
 
-  if ((feasible && status == EXTERNAL_SIMPLEX_FEASIBLE)
-    || (!feasible && status == EXTERNAL_SIMPLEX_INFEASIBLE)) {
-    solver->stats.external_success++;
-  } else if (invoked_external_solver) {
-    solver->stats.external_failure++;
+  if (invoked_external_solver) {
+    switch (status) {
+    case EXTERNAL_SIMPLEX_EXHAUSTED:
+      solver->stats.external_exhausted++;
+      break;
+    case EXTERNAL_SIMPLEX_FEASIBLE:
+      if (feasible) {
+        solver->stats.external_feasible_correct++;
+      } else {
+        solver->stats.external_feasible_incorrect++;
+      }
+      break;
+    case EXTERNAL_SIMPLEX_INFEASIBLE:
+      if (!feasible) {
+        solver->stats.external_infeasible_correct++;
+      } else {
+        solver->stats.external_infeasible_incorrect++;
+      }
+      break;
+    default:
+      solver->stats.external_other++;
+      break;
+    }
   }
 
   return feasible;

@@ -647,10 +647,17 @@ typedef struct simplex_stats_s {
   uint32_t delta_calls;
   uint32_t external_calls;
   uint32_t external_extended_search_count;
-  uint32_t external_success;
-  uint32_t external_failure;
+  uint32_t external_exhausted;
+  uint32_t external_feasible_correct;
+  uint32_t external_feasible_incorrect;
+  uint32_t external_infeasible_correct;
+  uint32_t external_infeasible_incorrect;
+  uint32_t external_other;
   uint32_t adjustment_pivots;
   uint32_t external_lp_solver;
+  double external_lp_setup_time;
+  double external_lp_run_time;
+  uint32_t iterative_refinements;
 
   // stats on integer arithmetic solver
   uint32_t num_make_intfeasible;        // calls to make_integer_feasible

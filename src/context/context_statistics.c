@@ -121,17 +121,25 @@ static void show_simplex_stats(FILE *f, simplex_stats_t *stat) {
   fprintf(f, " rows in final tableau   : %"PRIu32"\n", stat->num_end_rows);
   fprintf(f, " calls to make_feasible  : %"PRIu32"\n", stat->num_make_feasible);
   fprintf(f, " pivots                  : %"PRIu32"\n", stat->num_pivots);
-  fprintf(f, " initial delta           : %.2f\n", stat->initial_delta);
+  fprintf(f, " initial delta           : %.3f\n", stat->initial_delta);
   fprintf(f, " epsilon mode            : %"PRIu32"\n", stat->epsilon_mode);
-  fprintf(f, " max delta               : %.2f\n", stat->max_delta);
+  fprintf(f, " max delta               : %.3f\n", stat->max_delta);
   fprintf(f, " max precision           : %"PRIu32"\n", stat->max_precision);
   fprintf(f, " delta calls             : %"PRIu32"\n", stat->delta_calls);
   fprintf(f, " external solver calls   : %"PRIu32"\n", stat->external_calls);
   fprintf(f, " external extnd search   : %"PRIu32"\n", stat->external_extended_search_count);
-  fprintf(f, " external calls success  : %"PRIu32"\n", stat->external_success);
-  fprintf(f, " external calls failure  : %"PRIu32"\n", stat->external_failure);
+  fprintf(f, " external exhausted      : %"PRIu32"\n", stat->external_exhausted);
+  fprintf(f, " external feas. correct  : %"PRIu32"\n", stat->external_feasible_correct);
+  fprintf(f, " external feas. incorrect: %"PRIu32"\n", stat->external_feasible_incorrect);
+  fprintf(f, " external infeas. correct: %"PRIu32"\n", stat->external_infeasible_correct);
+  fprintf(f, " external infeas. incorr.: %"PRIu32"\n", stat->external_infeasible_incorrect);
+  fprintf(f, " external other          : %"PRIu32"\n", stat->external_other);
   fprintf(f, " adjustment pivots       : %"PRIu32"\n", stat->adjustment_pivots);
   fprintf(f, " external lp solver      : %"PRIu32"\n", stat->external_lp_solver);
+  fprintf(f, " external lp setup time  : %.3f\n", stat->external_lp_setup_time);
+  fprintf(f, " external lp run time    : %.3f\n", stat->external_lp_run_time);
+  fprintf(f, " iterative refinements   : %"PRIu32"\n", stat->iterative_refinements);
+
   fprintf(f, " bland-rule activations  : %"PRIu32"\n", stat->num_blands);
   fprintf(f, " simple lemmas           : %"PRIu32"\n", stat->num_binary_lemmas);
   //  fprintf(f, " propagation lemmas      : %"PRIu32"\n", stat->num_prop_lemmas);  (it's always zero)

@@ -492,12 +492,28 @@ static inline uint32_t simplex_external_calls(simplex_solver_t *solver) {
   return solver->stats.external_calls;
 }
 
-static inline uint32_t simplex_external_success(simplex_solver_t *solver) {
-  return solver->stats.external_success;
+static inline uint32_t simplex_external_exhausted(simplex_solver_t *solver) {
+  return solver->stats.external_exhausted;
 }
 
-static inline uint32_t simplex_external_failure(simplex_solver_t *solver) {
-  return solver->stats.external_failure;
+static inline uint32_t simplex_external_feasible_correct(simplex_solver_t *solver) {
+  return solver->stats.external_feasible_correct;
+}
+
+static inline uint32_t simplex_external_feasible_incorrect(simplex_solver_t *solver) {
+  return solver->stats.external_feasible_incorrect;
+}
+
+static inline uint32_t simplex_external_infeasible_correct(simplex_solver_t *solver) {
+  return solver->stats.external_infeasible_correct;
+}
+
+static inline uint32_t simplex_external_infeasible_incorrect(simplex_solver_t *solver) {
+  return solver->stats.external_infeasible_incorrect;
+}
+
+static inline uint32_t simplex_external_other(simplex_solver_t *solver) {
+  return solver->stats.external_other;
 }
 
 static inline uint32_t simplex_adjustment_pivots(simplex_solver_t *solver) {
@@ -506,6 +522,18 @@ static inline uint32_t simplex_adjustment_pivots(simplex_solver_t *solver) {
 
 static inline uint32_t simplex_external_lp_solver(simplex_solver_t *solver) {
   return solver->stats.external_lp_solver;
+}
+
+static inline uint32_t simplex_external_lp_setup_time(simplex_solver_t *solver) {
+  return solver->stats.external_lp_setup_time;
+}
+
+static inline double simplex_external_lp_run_time(simplex_solver_t *solver) {
+  return solver->stats.external_lp_run_time;
+}
+
+static inline double simplex_iterative_refinements(simplex_solver_t *solver) {
+  return solver->stats.iterative_refinements;
 }
 
 /*

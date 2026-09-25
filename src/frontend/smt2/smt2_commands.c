@@ -1738,10 +1738,17 @@ static void show_simplex_stats(int fd, print_buffer_t *b, simplex_solver_t *solv
   print_string_and_uint32(fd, b, " :simplex-delta-calls ", simplex_delta_calls(solver));
   print_string_and_uint32(fd, b, " :simplex-external-calls ", simplex_external_calls(solver));
   print_string_and_uint32(fd, b, " :simplex-external-extended-search-count ", simplex_external_extended_search_count(solver));
-  print_string_and_uint32(fd, b, " :simplex-external-success ", simplex_external_success(solver));
-  print_string_and_uint32(fd, b, " :simplex-external-failure ", simplex_external_failure(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-exhausted ", simplex_external_exhausted(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-feasible-correct ", simplex_external_feasible_correct(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-feasible-incorrect ", simplex_external_feasible_incorrect(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-infeasible-correct ", simplex_external_infeasible_correct(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-infeasible-incorrect ", simplex_external_infeasible_incorrect(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-other ", simplex_external_other(solver));
   print_string_and_uint32(fd, b, " :simplex-adjustment-pivots ", simplex_adjustment_pivots(solver));
   print_string_and_uint32(fd, b, " :simplex-external-lp-solver ", simplex_external_lp_solver(solver));
+  print_string_and_float(fd, b, " :simplex-external-lp-setup-time ", simplex_external_lp_setup_time(solver));
+  print_string_and_float(fd, b, " :simplex-external-lp-run-time ", simplex_external_lp_run_time(solver));
+  print_string_and_uint32(fd, b, " :simplex-iterative-refinements ", simplex_iterative_refinements(solver));
   print_string_and_uint32(fd, b, " :simplex-conflicts ", simplex_num_conflicts(solver));
   print_string_and_uint32(fd, b, " :simplex-interface-lemmas ", simplex_num_interface_lemmas(solver));
   if (simplex_num_make_integer_feasible(solver) > 0 ||
