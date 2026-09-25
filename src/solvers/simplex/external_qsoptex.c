@@ -43,6 +43,7 @@ typedef struct {
 
 static const int pivot_threshold = 10000;
 static bool qsx_started = false;
+static mpq_t mpq_negoneLpNum;
 
 /**
  * Checks whether a theory variable is already represented as a column in the
@@ -90,6 +91,23 @@ static bool var_is_valid_row(simplex_solver_t *const solver, const thvar_t v) {
 }
 
 /**
+ * Determines whether a theory variable may be encoded as a structural column in
+ * the LP model.
+ * We only care about free variables, i.e., those that appear
+ * in the SMT definition.
+ * @param solver The simplex solver containing the variable table and bounds.
+ * @param v The theory variable to inspect.
+ * @return true if the variable is free; otherwise false.
+ */
+static bool var_is_valid_strict_column(simplex_solver_t *const solver,
+                                       const thvar_t v) {
+  if (arith_var_is_free(&solver->vtbl, v) &&
+      (has_strict_lb(solver, v) || has_strict_ub(solver, v)))
+    return true;
+  return false;
+}
+
+/**
  * Initializes the global QSopt_ex runtime if it has not already been started.
  * This function is idempotent and ensures the underlying QSopt_ex exact solver
  * is initialized before building or solving LP problems.
@@ -99,11 +117,14 @@ static void global_qsx_start() {
     return;
   qsx_started = true;
   QSexactStart();
+  mpq_init(mpq_negoneLpNum);
+  mpq_set_si(mpq_negoneLpNum, -1, 1);
 }
 
 void global_qsx_clear() {
   if (!qsx_started)
     return;
+  mpq_clear(mpq_negoneLpNum);
   QSexactClear();
   qsx_started = false;
 }
@@ -135,6 +156,45 @@ static void qsx_init(qsx_t *qsx) {
                   __smt2_globals.verbosity);
 }
 
+static void qsx_estimate_n_cols_and_rows_epsilon(simplex_solver_t *const solver,
+                                                 qsx_t *qsx) {
+  assert(__smt2_globals.epsilon_mode);
+  const uint32_t nvars = solver->vtbl.nvars;
+
+  for (thvar_t v = 0; v < nvars; v++) {
+    if (var_is_valid_row(solver, v)) {
+      qsx->n_rows++;
+    } else if (var_is_valid_column(solver, v)) {
+      qsx->n_cols++;
+    }
+  }
+}
+
+static void qsx_estimate_n_cols_and_rows_strict(simplex_solver_t *const solver,
+                                                qsx_t *qsx) {
+  assert(!__smt2_globals.epsilon_mode);
+  const uint32_t nvars = solver->vtbl.nvars;
+  for (thvar_t v = 0; v < nvars; v++) {
+    if (var_is_valid_row(solver, v)) {
+      qsx->n_rows++;
+      if (has_strict_lb(solver, v) || has_strict_ub(solver, v)) {
+        qsx->n_rows++;
+      }
+    } else if (var_is_valid_column(solver, v)) {
+      qsx->n_cols++;
+      // If epsilon mode is disables (i.e., we are using strict mode),
+      // then we need to encode the strict bounds on the free var
+      // by using some strict constraint
+      if (has_strict_lb(solver, v)) {
+        qsx->n_rows++;
+      }
+      if (has_strict_ub(solver, v)) {
+        qsx->n_rows++;
+      }
+    }
+  }
+}
+
 /**
  * Allocates the QSopt_ex column/row mappings and temporary numeric arrays for a
  * simplex solver.
@@ -150,12 +210,10 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   // which is equal to the rows of the LP problem,
   // and the number of structural variables,
   // which is equal to the columns of the LP problem.
-  for (thvar_t v = 0; v < nvars; v++) {
-    if (var_is_valid_row(&solver->vtbl, v)) {
-      qsx->n_aux++;
-    } else if (var_is_valid_column(&solver->vtbl, v)) {
-      qsx->n_struct++;
-    }
+  if (__smt2_globals.epsilon_mode) {
+    qsx_estimate_n_cols_and_rows_epsilon(solver, qsx);
+  } else {
+    qsx_estimate_n_cols_and_rows_strict(solver, qsx);
   }
 
   qsx->col_to_var = safe_malloc(qsx->n_cols * sizeof(thvar_t));
@@ -340,8 +398,6 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   int *const col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows);
   mpq_t *const values = safe_malloc(sizeof(mpq_t) * qsx->n_cols * qsx->n_rows);
 
-  int32_t non_zero_per_row_idx = 0;
-
   row_data_t row_data = {.col_idxs = col_idxs,
                          .values = values,
                          .row_idx = 0,
@@ -377,7 +433,7 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
         mpq_set(qsx->rhs[r], lb.val);
         mpq_set(qsx->range[r], ub.val);
         mpq_sub(qsx->range[r], qsx->range[r], qsx->rhs[r]);
-        if (__smt2_globals.epsilon_mode && lb.is_strict) {
+        if (lb.is_strict) { // Need to offset the lower bound by epsilon
           mpq_sub_si(qsx->range[r], epsilon_num, epsilon_den);
         }
         qsx->sense[r] = 'R';
@@ -417,7 +473,7 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
 
     // For each row, we set the number of non-zero coefficients
     // (i.e., the size of the row)
-    non_zero_per_row[non_zero_per_row_idx++] = num_non_zeros;
+    non_zero_per_row[r] = num_non_zeros;
 
     // Add the new row to the map
     qsx->row_to_var[r] = v;
@@ -425,9 +481,9 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
     row_data.row_idx++;
   }
 
-  mpq_QSadd_ranged_rows(prob, non_zero_per_row_idx, non_zero_per_row,
-                        begin_row_idx, col_idxs, values, qsx->rhs, qsx->sense,
-                        qsx->range, NULL);
+  mpq_QSadd_ranged_rows(prob, row_data.row_idx, non_zero_per_row, begin_row_idx,
+                        col_idxs, values, qsx->rhs, qsx->sense, qsx->range,
+                        NULL);
 
   mpq_vector_clear(values, row_data.values_idx);
   safe_free(col_idxs);
@@ -627,7 +683,38 @@ static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
  * @param solver The simplex solver containing the variable definitions.
  * @param qsx The QSopt_ex wrapper that would receive the strict-mode columns.
  */
-static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {}
+static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
+  mpq_QSprob prob = qsx->prob;
+
+  // Construct the columns of the LP by assigning upper/lower bounds to each
+  // variable
+  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
+  for (thvar_t v = 0; v < num_vars; v++) {
+
+    // Free variables. They come from the SMT input. Encode them as columns.
+    if (var_is_valid_column(solver, v)) {
+      bound_type_t lb, ub;
+      get_bound(solver, v, true, &lb);
+      get_bound(solver, v, false, &ub);
+
+      qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
+      qsx->var_to_col[v] = mpq_QSget_colcount(prob);
+      mpq_QSnew_col(prob, mpq_zeroLpNum,
+                    lb.is_finite && !lb.is_strict ? lb.val : mpq_NINFTY,
+                    ub.is_finite && !ub.is_strict ? ub.val : mpq_INFTY, NULL);
+
+      bound_type_clear(&lb);
+      bound_type_clear(&ub);
+    }
+
+    // If the variable is not free, it is an auxiliary variable.
+    // We will encode those as rows later.
+  }
+
+  // At the end, add the strict variable column,
+  // which is used to encode the strict bounds
+  mpq_QSnew_col(prob, mpq_negoneLpNum, mpq_zeroLpNum, mpq_oneLpNum, NULL);
+}
 
 /**
  * Reserved placeholder for strict-mode row construction.
@@ -636,7 +723,220 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {}
  * @param solver The simplex solver containing the row definitions.
  * @param qsx The QSopt_ex wrapper that would receive the strict-mode rows.
  */
-static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {}
+static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
+  mpq_QSprob prob = qsx->prob;
+  int non_zero_per_row[qsx->n_rows];
+  int begin_row_idx[qsx->n_rows];
+  const int strict_var_idx = qsx->n_cols; // TODO: n_cols or QSget_n_cols ?
+
+  row_data_t rd = {
+      .col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows),
+      .values = safe_malloc(sizeof(mpq_t) * qsx->n_cols * qsx->n_rows),
+      .row_idx = 0,
+      .col_idxs_idx = 0,
+      .values_idx = 0};
+
+  // Add rows to the LP problem
+  const int32_t n_vars = (int32_t)solver->vtbl.nvars;
+  for (thvar_t v = 0; v < n_vars; v++) {
+    // Skip structural variables and constants
+    if (!var_is_valid_row(solver, v) &&
+        !var_is_valid_strict_column(solver, v)) {
+      continue;
+    }
+
+    // Add a strict constraint for each strict bound around a free variable
+    if (var_is_valid_strict_column(solver, v)) {
+      assert(has_strict_lb(solver, v) || has_strict_ub(solver, v));
+      if (has_strict_lb(solver, v)) {
+        assert(has_lb(solver, v));
+        non_zero_per_row[rd.row_idx] = 2;
+        begin_row_idx[rd.row_idx] = rd.col_idxs_idx;
+        rd.col_idxs[rd.col_idxs_idx++] = qsx->var_to_col[v];
+        rd.col_idxs[rd.col_idxs_idx++] =
+            qsx->n_cols; // TODO: n_cols or QSget_n_cols ?
+        // Add 1 coeff to the variable and -1 to the strict variable
+        mpq_init(rd.values[rd.values_idx]);
+        mpq_set(rd.values[rd.values_idx++], mpq_oneLpNum);
+        mpq_init(rd.values[rd.values_idx]);
+        mpq_set(rd.values[rd.values_idx++], mpq_negoneLpNum);
+        // Set the sense 'Greater Than'
+        qsx->sense[rd.row_idx] = 'G';
+        // Set the right-hand side to the lower bound of the variable
+        copy_to_gmp(qsx->rhs[rd.row_idx], &get_lb(solver, v)->main);
+        // No need for range
+        mpq_set(qsx->range[rd.row_idx], mpq_zeroLpNum);
+        // Update the mapping and increment the row index
+        qsx->row_to_var[rd.row_idx] = v;
+        qsx->var_to_row[v] = rd.row_idx;
+        rd.row_idx++;
+      }
+      if (has_strict_ub(solver, v)) {
+        assert(has_ub(solver, v));
+        non_zero_per_row[rd.row_idx] = 2;
+        begin_row_idx[rd.row_idx] = rd.col_idxs_idx;
+        rd.col_idxs[rd.col_idxs_idx++] = qsx->var_to_col[v];
+        rd.col_idxs[rd.col_idxs_idx++] = strict_var_idx;
+        // Add 1 coeff to the variable and 1 to the strict variable
+        mpq_init(rd.values[rd.values_idx]);
+        mpq_set(rd.values[rd.values_idx++], mpq_oneLpNum);
+        mpq_init(rd.values[rd.values_idx]);
+        mpq_set(rd.values[rd.values_idx++], mpq_oneLpNum);
+        // Set the sense 'Greater Than'
+        qsx->sense[rd.row_idx] = 'L';
+        // Set the right-hand side to the lower bound of the variable
+        copy_to_gmp(qsx->rhs[rd.row_idx], &get_ub(solver, v)->main);
+        // No need for range
+        mpq_set(qsx->range[rd.row_idx], mpq_zeroLpNum);
+        // Update the mapping and increment the row index
+        qsx->row_to_var[rd.row_idx] = v;
+        qsx->var_to_row[v] = rd.row_idx;
+        rd.row_idx++;
+      }
+      continue;
+    }
+
+    // where the non-zero columns of the row are stored
+    begin_row_idx[rd.row_idx] = rd.col_idxs_idx;
+
+    mpq_set(qsx->rhs[rd.row_idx], mpq_zeroLpNum);
+    // TODO: may be unnecessary if 'R' sense is not used
+    mpq_set(qsx->range[rd.row_idx], mpq_zeroLpNum);
+
+    // Add row range
+    bound_type_t lb, ub;
+    get_bound(solver, v, true, &lb);
+    get_bound(solver, v, false, &ub);
+
+    if (!lb.is_finite && !ub.is_finite) // Unbounded row
+    {
+#if 1
+      bound_type_clear(&lb);
+      bound_type_clear(&ub);
+      continue;
+#else
+      mpq_set(qsx->rhs[rd.row_idx], mpq_NINFTY);
+      qsx->sense[rd.row_idx] = 'G';
+#endif
+    }
+
+    const int num_non_zeros = monomials_to_row(solver, qsx, v, &rd, NULL,
+                                               lb.is_finite || ub.is_finite);
+
+    // For each row, we set the number of non-zero coefficients
+    // (i.e., the size of the row)
+    non_zero_per_row[rd.row_idx] = num_non_zeros;
+
+    // There is at least a strict bound, they need to be handled by including
+    // the strict variable in the row
+    if (has_strict_lb(solver, v) || has_strict_ub(solver, v)) {
+      const bool is_lb_strict = has_strict_lb(solver, v);
+
+      if (lb.is_finite) {
+        if (is_lb_strict) {
+          non_zero_per_row[rd.row_idx]++;
+          rd.col_idxs[rd.col_idxs_idx++] = strict_var_idx;
+          mpq_init(rd.values[rd.values_idx]);
+          mpq_set(rd.values[rd.values_idx++], mpq_negoneLpNum);
+        }
+        mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], lb.val);
+        qsx->sense[rd.row_idx] = 'G';
+        // Add the new row to the map
+        qsx->row_to_var[rd.row_idx] = v;
+        qsx->var_to_row[v] = rd.row_idx;
+        rd.row_idx++;
+      }
+
+      // Case II: we are dealing with a row with at least one bound. If both
+      // bounds are set, we add the row twice, once for the lower bound and once
+      // for the upper bound.
+      if (has_lb(solver, v) && has_ub(solver, v)) {
+        // Insert all cols (except strict col, if present)
+        begin_row_idx[rd.row_idx] = rd.col_idxs_idx;
+        const int max_idx_offset = is_lb_strict ? 1 : 0;
+        for (int i = rd.col_idxs_idx - num_non_zeros;
+             i < rd.col_idxs_idx - max_idx_offset; i++) {
+          rd.col_idxs[rd.col_idxs_idx++] = rd.col_idxs[i];
+        }
+        for (int i = rd.values_idx - num_non_zeros;
+             i < rd.values_idx - max_idx_offset; i++) {
+          mpq_init(rd.values[rd.values_idx]);
+          mpq_set(rd.values[rd.values_idx++], rd.values[i]);
+        }
+        non_zero_per_row[rd.row_idx] = num_non_zeros - max_idx_offset;
+      }
+
+      if (ub.is_finite) {
+        if (ub.is_strict) {
+          non_zero_per_row[rd.row_idx]++;
+          rd.col_idxs[rd.col_idxs_idx++] = strict_var_idx;
+          mpq_init(rd.values[rd.values_idx]);
+          mpq_set(rd.values[rd.values_idx++], mpq_oneLpNum);
+        }
+        mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], ub.val);
+        qsx->sense[rd.row_idx] = 'L';
+        // Add the new row to the map
+        qsx->row_to_var[rd.row_idx] = v;
+        qsx->var_to_row[v] = rd.row_idx;
+        rd.row_idx++;
+      }
+
+      bound_type_clear(&lb);
+      bound_type_clear(&ub);
+      continue;
+    }
+
+    assert(!has_strict_lb(solver, v) && !has_strict_ub(solver, v));
+    if (lb.is_finite && ub.is_finite) // Bounded
+    {
+      if (mpq_equal(lb.val, ub.val)) {
+        mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], lb.val);
+        qsx->sense[rd.row_idx] = 'E';
+      } else {
+        mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], lb.val);
+        mpq_set(qsx->range[rd.row_idx], ub.val);
+        mpq_sub(qsx->range[rd.row_idx], qsx->range[rd.row_idx],
+                qsx->rhs[rd.row_idx]);
+        qsx->sense[rd.row_idx] = 'R';
+      }
+      // printf("Adding bounded row %d with lower bound %s and upper bound
+      // %s\n", row_idx, mpq_get_str(NULL, 10, d_rhs[row_idx]),
+      // mpq_get_str(NULL, 10, d_range[row_idx]));
+    } else if (lb.is_finite) // Only lower bound
+    {
+      // printf("Adding lower bounded row %d with lower bound %s\n", row_idx,
+      // mpq_get_str(NULL, 10, lb.val));
+      mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], lb.val);
+      qsx->sense[rd.row_idx] = 'G';
+    } else if (ub.is_finite) // Only upper bound
+    {
+      // printf("Adding upper bounded row %d with upper bound %s\n",
+      // row_data.row_idx,
+      //        mpq_get_str(NULL, 10, ub.val));
+      mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], ub.val);
+      qsx->sense[rd.row_idx] = 'L';
+    } else // Unbounded row, handled above
+    {
+      assert(false);
+    }
+
+    bound_type_clear(&lb);
+    bound_type_clear(&ub);
+
+    // Add the new row to the map
+    qsx->row_to_var[rd.row_idx] = v;
+    qsx->var_to_row[v] = rd.row_idx;
+    rd.row_idx++;
+  }
+
+  mpq_QSadd_ranged_rows(prob, rd.row_idx, non_zero_per_row, begin_row_idx,
+                        rd.col_idxs, rd.values, qsx->rhs, qsx->sense,
+                        qsx->range, NULL);
+
+  mpq_vector_clear(rd.values, rd.values_idx);
+  safe_free(rd.col_idxs);
+  safe_free(rd.values);
+}
 
 /**
  * Builds the strict-mode LP representation used when strict mode is enabled.
@@ -770,14 +1070,14 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   else
     qsx_build_problem_strict(solver, &qsx);
 #if 0
-  mpq_QSdump_prob(qsx->prob);
+  mpq_QSdump_prob(qsx.prob);
   static int i = 0;
   char filename[256];
-  snprintf(
-      filename, sizeof(filename),
-      "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/qsproblem_%d.lp",
-      i);
-  mpq_QSwrite_prob(qsx->prob, filename, "LP");
+  snprintf(filename, sizeof(filename),
+           "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/"
+           "qsproblem_%d_%s.lp",
+           i, __smt2_globals.epsilon_mode ? "epsilon" : "strict");
+  mpq_QSwrite_prob(qsx.prob, filename, "LP");
   i++;
 #endif
   qsx_solve_lp(solver, &qsx, sol);
