@@ -648,12 +648,13 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   int non_zero_per_row[qsx->n_rows];
   int begin_row_idx[qsx->n_rows];
 
-  row_data_t rd = {
-      .col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows),
-      .values = safe_malloc(sizeof(mpq_t) * qsx->n_cols * qsx->n_rows),
-      .row_idx = 0,
-      .col_idxs_idx = 0,
-      .values_idx = 0};
+  row_data_t rd = {.col_idxs = safe_malloc(
+                       sizeof(int) * mpq_QSget_colcount(prob) * qsx->n_rows),
+                   .values = safe_malloc(
+                       sizeof(mpq_t) * mpq_QSget_colcount(prob) * qsx->n_rows),
+                   .row_idx = 0,
+                   .col_idxs_idx = 0,
+                   .values_idx = 0};
 
   // Add rows to the LP problem
   const int32_t n_vars = (int32_t)solver->vtbl.nvars;
@@ -828,12 +829,13 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   int begin_row_idx[qsx->n_rows];
   const int strict_var_idx = qsx->n_cols; // TODO: n_cols or QSget_n_cols ?
 
-  row_data_t rd = {
-      .col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows),
-      .values = safe_malloc(sizeof(mpq_t) * qsx->n_cols * qsx->n_rows),
-      .row_idx = 0,
-      .col_idxs_idx = 0,
-      .values_idx = 0};
+  row_data_t rd = {.col_idxs = safe_malloc(
+                       sizeof(int) * mpq_QSget_colcount(prob) * qsx->n_rows),
+                   .values = safe_malloc(
+                       sizeof(mpq_t) * mpq_QSget_colcount(prob) * qsx->n_rows),
+                   .row_idx = 0,
+                   .col_idxs_idx = 0,
+                   .values_idx = 0};
 
   // Add rows to the LP problem
   const int32_t n_vars = (int32_t)solver->vtbl.nvars;
