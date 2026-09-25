@@ -87,7 +87,8 @@ static bool var_is_valid_row(simplex_solver_t *const solver, const thvar_t v) {
     return false;
   const polynomial_t *const p = arith_var_poly_def(&solver->vtbl, v);
   assert(p);
-  return !(p->nterms == 1 && p->mono[0].var == const_idx);
+  return !(p->nterms == 1 && p->mono[0].var == const_idx) &&
+         has_any_bound(solver, v);
 }
 
 /**
@@ -143,6 +144,28 @@ static void basis_clear(QSbasis *const basis) {
   basis->nrows = 0;
 }
 
+static external_simplex_status_t
+qsx_status_to_sol_status(const qsx_t *const qsx) {
+  switch (qsx->status) {
+  case QS_LP_OPTIMAL:
+  case QS_LP_FEASIBLE:
+  case QS_LP_DELTA_OPTIMAL:
+  case QS_LP_DELTA_FEASIBLE:
+  case QS_LP_UNBOUNDED:
+    return is_strict_var_zero(qsx->x[qsx->n_cols]) ? EXTERNAL_SIMPLEX_INFEASIBLE
+                                                   : EXTERNAL_SIMPLEX_FEASIBLE;
+    break;
+  case QS_LP_INFEASIBLE:
+    return EXTERNAL_SIMPLEX_INFEASIBLE;
+  case QS_LP_ITER_LIMIT:
+  case QS_LP_TIME_LIMIT:
+    return EXTERNAL_SIMPLEX_EXHAUSTED;
+    break;
+  default:
+    return EXTERNAL_SIMPLEX_ERROR;
+  }
+}
+
 /**
  * Creates a new QSopt_ex LP problem wrapper and configures solver parameters.
  * @param qsx The wrapper to initialize.
@@ -159,6 +182,8 @@ static void qsx_init(qsx_t *qsx) {
 static void qsx_estimate_n_cols_and_rows_epsilon(simplex_solver_t *const solver,
                                                  qsx_t *qsx) {
   assert(__smt2_globals.epsilon_mode);
+  assert(qsx->n_cols == 0);
+  assert(qsx->n_rows == 0);
   const uint32_t nvars = solver->vtbl.nvars;
 
   for (thvar_t v = 0; v < nvars; v++) {
@@ -173,11 +198,14 @@ static void qsx_estimate_n_cols_and_rows_epsilon(simplex_solver_t *const solver,
 static void qsx_estimate_n_cols_and_rows_strict(simplex_solver_t *const solver,
                                                 qsx_t *qsx) {
   assert(!__smt2_globals.epsilon_mode);
+  assert(qsx->n_cols == 0);
+  assert(qsx->n_rows == 0);
   const uint32_t nvars = solver->vtbl.nvars;
   for (thvar_t v = 0; v < nvars; v++) {
     if (var_is_valid_row(solver, v)) {
       qsx->n_rows++;
-      if (has_strict_lb(solver, v) || has_strict_ub(solver, v)) {
+      if ((has_strict_lb(solver, v) || has_strict_ub(solver, v)) &&
+          has_lb(solver, v) && has_ub(solver, v)) {
         qsx->n_rows++;
       }
     } else if (var_is_valid_column(solver, v)) {
@@ -210,6 +238,8 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   // which is equal to the rows of the LP problem,
   // and the number of structural variables,
   // which is equal to the columns of the LP problem.
+  qsx->n_cols = 0;
+  qsx->n_rows = 0;
   if (__smt2_globals.epsilon_mode) {
     qsx_estimate_n_cols_and_rows_epsilon(solver, qsx);
   } else {
@@ -220,7 +250,10 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   qsx->row_to_var = safe_malloc(qsx->n_rows * sizeof(thvar_t));
   qsx->var_to_col = safe_malloc(nvars * sizeof(uint32_t));
   qsx->var_to_row = safe_malloc(nvars * sizeof(uint32_t));
-  qsx->x = safe_malloc(qsx->n_cols * sizeof(mpq_t));
+  // We are adding an additional variable to the LP problem
+  // to collect the value of the strict var, if needed.
+  // There is no need do add it anywhere else
+  qsx->x = safe_malloc((qsx->n_cols + 1) * sizeof(mpq_t));
   qsx->y = safe_malloc(qsx->n_rows * sizeof(mpq_t));
   qsx->range = safe_malloc(qsx->n_rows * sizeof(mpq_t));
   qsx->rhs = safe_malloc(qsx->n_rows * sizeof(mpq_t));
@@ -230,6 +263,9 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
     qsx->col_to_var[i] = -1;
     mpq_init(qsx->x[i]);
   }
+  mpq_init(qsx->x[qsx->n_cols]); // Initialize the strict var
+  mpq_set(qsx->x[qsx->n_cols], mpq_oneLpNum);
+
   for (uint32_t i = 0; i < qsx->n_rows; i++) {
     qsx->row_to_var[i] = -1;
     mpq_init(qsx->y[i]);
@@ -249,7 +285,7 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
 static void qsx_clear(qsx_t *const qsx) {
   basis_clear(&qsx->basis);
   mpq_QSfree_prob(qsx->prob);
-  mpq_vector_clear(qsx->x, qsx->n_cols);
+  mpq_vector_clear(qsx->x, qsx->n_cols + 1);
   mpq_vector_clear(qsx->y, qsx->n_rows);
   mpq_vector_clear(qsx->range, qsx->n_rows);
   mpq_vector_clear(qsx->rhs, qsx->n_rows);
@@ -375,6 +411,150 @@ static int monomials_to_row(simplex_solver_t *const solver,
   return num_non_zeros;
 }
 
+/**
+ * Extracts the value of a structural variable from the solved QSopt_ex LP and
+ * stores it in the external solution object.
+ * @param solver The simplex solver used to interpret the variable bounds.
+ * @param qsx The solved QSopt_ex problem containing the LP basis and values.
+ * @param sol The destination solution record to update.
+ * @param c The LP column index to extract.
+ */
+static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
+                              external_solution_t *const sol, const int c) {
+  xrational_t *x = sol->x;
+  const thvar_t v = qsx->col_to_var[c];
+  const char var_status = qsx->basis.cstat[c];
+  // from thvar to col index
+
+  if (var_status == QS_COL_BSTAT_BASIC)
+    int_bvset_add(&sol->b_vars, v);
+  else
+    int_bvset_add(&sol->nb_vars, v);
+
+  switch (var_status) {
+    // If we are dealing with a basic variable, we necessarily need to get its
+    // value from the solved problem.
+  case QS_COL_BSTAT_BASIC:
+  case QS_COL_BSTAT_FREE: // Shared with basic
+    // Start by setting the current basic result
+    xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
+    // Ensure the result is within the bounds of the variable, if any
+    if (is_below_or_eq_lb(solver, v, x + v)) {
+      sol->bounds[v] = VAR_BOUND_AT_LOWER;
+    } else if (is_above_or_eq_ub(solver, v, x + v)) {
+      sol->bounds[v] = VAR_BOUND_AT_UPPER;
+    }
+    break;
+    // For non-basic variables we know the value is at a bound
+    // and we can use the d_vars/proper LP bounds directly
+  case QS_COL_BSTAT_LOWER:
+    if (!has_any_bound(solver, v)) {
+      // Free rows are set to lower bound, so we leave the value as is
+      // (there is no lower bound to set them to)
+      xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
+      assert(xq_is_zero(sol->x + v));
+    } else {
+      assert(has_lb(solver, v));
+      sol->bounds[v] = VAR_BOUND_AT_LOWER;
+    }
+    break;
+  case QS_COL_BSTAT_UPPER:
+    assert(has_ub(solver, v));
+    sol->bounds[v] = VAR_BOUND_AT_UPPER;
+    break;
+  default:
+    printf("Unknown variable status for variable %d: %c\n", v, var_status);
+    exit(1);
+  }
+}
+
+/**
+ * Computes the value of an auxiliary row variable from the solved QSopt_ex row
+ * data and stores it in the output solution.
+ * @param qsx The solved QSopt_ex problem that stores the row RHS and dual
+ * values.
+ * @param sol The destination solution object.
+ * @param r The row index to convert back to a theory variable value.
+ */
+static void row_value_to_solution(const qsx_t *const qsx,
+                                  const external_solution_t *const sol,
+                                  const int r) {
+  const thvar_t v = qsx->row_to_var[r];
+  mpq_t rhs;
+  mpq_init(rhs);
+  mpq_set(rhs, qsx->rhs[r]);
+  if (qsx->sense[r] == 'L') {
+    mpq_sub(rhs, rhs, qsx->y[r]);
+  } else {
+    mpq_add(rhs, rhs, qsx->y[r]);
+  }
+  xq_set_mpq_prenormalize(sol->x + v, rhs);
+  mpq_clear(rhs);
+}
+
+/**
+ * Extracts the value of an auxiliary row variable from the solved LP and
+ * updates the bound state in the external solution.
+ * @param solver The simplex solver that defines the row bounds.
+ * @param qsx The solved QSopt_ex problem containing the basis and row data.
+ * @param sol The solution object to populate.
+ * @param r The row index to extract.
+ */
+static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
+                              external_solution_t *const sol, const int r) {
+  xrational_t *x = sol->x;
+  var_bound_state_t *bounds = sol->bounds;
+  const thvar_t v = qsx->row_to_var[r];
+  const char var_status = qsx->basis.rstat[r];
+
+  if (var_status == QS_COL_BSTAT_BASIC)
+    int_bvset_add(&sol->b_vars, v);
+  else
+    int_bvset_add(&sol->nb_vars, v);
+
+  switch (var_status) {
+  // If we are dealing with a basic variable, we necessarily need to get its
+  // value from the solved problem.
+  case QS_COL_BSTAT_BASIC:
+  case QS_COL_BSTAT_FREE: // Shared with basic
+    row_value_to_solution(qsx, sol, r);
+    if (is_below_or_eq_lb(solver, v, x + v)) {
+      bounds[v] = VAR_BOUND_AT_LOWER;
+    } else if (is_above_or_eq_ub(solver, v, x + v)) {
+      bounds[v] = VAR_BOUND_AT_UPPER;
+    }
+    break;
+  // For non-basic variables we know the value is at a bound
+  // and we can use the d_vars/proper LP bounds directly
+  case QS_COL_BSTAT_LOWER:
+    // Free rows are set to lower bound, handle them accordingly
+    if (!has_any_bound(solver, v)) {
+      // Free rows are set to lower bound, so we leave the value as is
+      // (there is no lower bound to set them to)
+      row_value_to_solution(qsx, sol, r);
+    } else {
+      if (qsx->sense[r] == 'G' || qsx->sense[r] == 'R') {
+        assert(has_lb(solver, v));
+        bounds[v] = VAR_BOUND_AT_LOWER;
+      } else if (qsx->sense[r] == 'L') {
+        assert(has_ub(solver, v));
+        bounds[v] = VAR_BOUND_AT_UPPER;
+      } else {
+        assert(qsx->sense[r] == 'E');
+        bounds[v] = VAR_BOUND_AT_LOWER;
+      }
+    }
+    break;
+  case QS_COL_BSTAT_UPPER:
+    assert(has_ub(solver, v));
+    bounds[v] = VAR_BOUND_AT_UPPER;
+    break;
+  default:
+    printf("Unknown variable status for variable %d: %c\n", v, var_status);
+    exit(1);
+  }
+}
+
 #pragma region Epsilon mode
 
 /**
@@ -491,154 +671,6 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
 }
 
 /**
- * Extracts the value of a structural variable from the solved QSopt_ex LP and
- * stores it in the external solution object.
- * @param solver The simplex solver used to interpret the variable bounds.
- * @param qsx The solved QSopt_ex problem containing the LP basis and values.
- * @param sol The destination solution record to update.
- * @param c The LP column index to extract.
- */
-static void extract_col_value_epsilon(simplex_solver_t *const solver,
-                                      qsx_t *const qsx,
-                                      external_solution_t *const sol,
-                                      const int c) {
-  xrational_t *x = sol->x;
-  const thvar_t v = qsx->col_to_var[c];
-  const char var_status = qsx->basis.cstat[c];
-  // from thvar to col index
-
-  if (var_status == QS_COL_BSTAT_BASIC)
-    int_bvset_add(&sol->b_vars, v);
-  else
-    int_bvset_add(&sol->nb_vars, v);
-
-  switch (var_status) {
-    // If we are dealing with a basic variable, we necessarily need to get its
-    // value from the solved problem.
-  case QS_COL_BSTAT_BASIC:
-  case QS_COL_BSTAT_FREE: // Shared with basic
-    // Start by setting the current basic result
-    xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
-    // Ensure the result is within the bounds of the variable, if any
-    if (is_below_or_eq_lb(solver, v, x + v)) {
-      sol->bounds[v] = VAR_BOUND_AT_LOWER;
-    } else if (is_above_or_eq_ub(solver, v, x + v)) {
-      sol->bounds[v] = VAR_BOUND_AT_UPPER;
-    }
-    break;
-    // For non-basic variables we know the value is at a bound
-    // and we can use the d_vars/proper LP bounds directly
-  case QS_COL_BSTAT_LOWER:
-    if (!has_any_bound(solver, v)) {
-      // Free rows are set to lower bound, so we leave the value as is
-      // (there is no lower bound to set them to)
-      xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
-      assert(xq_is_zero(sol->x + v));
-    } else {
-      assert(has_lb(solver, v));
-      sol->bounds[v] = VAR_BOUND_AT_LOWER;
-    }
-    break;
-  case QS_COL_BSTAT_UPPER:
-    assert(has_ub(solver, v));
-    sol->bounds[v] = VAR_BOUND_AT_UPPER;
-    break;
-  default:
-    printf("Unknown variable status for variable %d: %c\n", v, var_status);
-    exit(1);
-  }
-}
-
-/**
- * Computes the value of an auxiliary row variable from the solved QSopt_ex row
- * data and stores it in the output solution.
- * @param qsx The solved QSopt_ex problem that stores the row RHS and dual
- * values.
- * @param sol The destination solution object.
- * @param r The row index to convert back to a theory variable value.
- */
-static void row_value_to_solution(const qsx_t *const qsx,
-                                  const external_solution_t *const sol,
-                                  const int r) {
-  const thvar_t v = qsx->row_to_var[r];
-  mpq_t rhs;
-  mpq_init(rhs);
-  mpq_set(rhs, qsx->rhs[r]);
-  if (qsx->sense[r] == 'L') {
-    mpq_sub(rhs, rhs, qsx->y[r]);
-  } else {
-    mpq_add(rhs, rhs, qsx->y[r]);
-  }
-  xq_set_mpq_prenormalize(sol->x + v, rhs);
-  mpq_clear(rhs);
-}
-
-/**
- * Extracts the value of an auxiliary row variable from the solved LP and
- * updates the bound state in the external solution.
- * @param solver The simplex solver that defines the row bounds.
- * @param qsx The solved QSopt_ex problem containing the basis and row data.
- * @param sol The solution object to populate.
- * @param r The row index to extract.
- */
-static void extract_row_value_epsilon(simplex_solver_t *const solver,
-                                      qsx_t *const qsx,
-                                      external_solution_t *const sol,
-                                      const int r) {
-  xrational_t *x = sol->x;
-  var_bound_state_t *bounds = sol->bounds;
-  const thvar_t v = qsx->row_to_var[r];
-  const char var_status = qsx->basis.rstat[r];
-
-  if (var_status == QS_COL_BSTAT_BASIC)
-    int_bvset_add(&sol->b_vars, v);
-  else
-    int_bvset_add(&sol->nb_vars, v);
-
-  switch (var_status) {
-  // If we are dealing with a basic variable, we necessarily need to get its
-  // value from the solved problem.
-  case QS_COL_BSTAT_BASIC:
-  case QS_COL_BSTAT_FREE: // Shared with basic
-    row_value_to_solution(qsx, sol, r);
-    if (is_below_or_eq_lb(solver, v, x + v)) {
-      bounds[v] = VAR_BOUND_AT_LOWER;
-    } else if (is_above_or_eq_ub(solver, v, x + v)) {
-      bounds[v] = VAR_BOUND_AT_UPPER;
-    }
-    break;
-  // For non-basic variables we know the value is at a bound
-  // and we can use the d_vars/proper LP bounds directly
-  case QS_COL_BSTAT_LOWER:
-    // Free rows are set to lower bound, handle them accordingly
-    if (!has_any_bound(solver, v)) {
-      // Free rows are set to lower bound, so we leave the value as is
-      // (there is no lower bound to set them to)
-      row_value_to_solution(qsx, sol, r);
-    } else {
-      if (qsx->sense[r] == 'G' || qsx->sense[r] == 'R') {
-        assert(has_lb(solver, v));
-        bounds[v] = VAR_BOUND_AT_LOWER;
-      } else if (qsx->sense[r] == 'L') {
-        assert(has_ub(solver, v));
-        bounds[v] = VAR_BOUND_AT_UPPER;
-      } else {
-        assert(qsx->sense[r] == 'E');
-        bounds[v] = VAR_BOUND_AT_LOWER;
-      }
-    }
-    break;
-  case QS_COL_BSTAT_UPPER:
-    assert(has_ub(solver, v));
-    bounds[v] = VAR_BOUND_AT_UPPER;
-    break;
-  default:
-    printf("Unknown variable status for variable %d: %c\n", v, var_status);
-    exit(1);
-  }
-}
-
-/**
  * Extracts every solved value from the epsilon-mode QSopt_ex LP into the
  * external solution record.
  * @param solver The simplex solver whose bounds are used to validate each
@@ -651,10 +683,10 @@ static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
   const mpq_QSprob *prob = &qsx->prob;
 
   for (int col_idx = 0; col_idx < mpq_QSget_colcount(*prob); col_idx++) {
-    extract_col_value_epsilon(solver, qsx, sol, col_idx);
+    extract_col_value(solver, qsx, sol, col_idx);
   }
   for (int row_idx = 0; row_idx < mpq_QSget_rowcount(*prob); row_idx++) {
-    extract_row_value_epsilon(solver, qsx, sol, row_idx);
+    extract_row_value(solver, qsx, sol, row_idx);
   }
 }
 
@@ -670,6 +702,8 @@ static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
                                       qsx_t *const qsx) {
   add_cols_epsilon(solver, qsx);
   add_rows_epsilon(solver, qsx);
+  assert(qsx->n_cols == mpq_QSget_colcount(qsx->prob));
+  assert(qsx->n_rows == mpq_QSget_rowcount(qsx->prob));
 }
 
 #pragma endregion
@@ -929,10 +963,22 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
     rd.row_idx++;
   }
 
+#if 0
+  printf("Added %d rows to the strict-mode LP\n", rd.row_idx);
+  print_int_vector(non_zero_per_row, rd.row_idx, "Non-zero per row");
+  print_int_vector(begin_row_idx, rd.row_idx, "Begin row index");
+  print_int_vector(rd.col_idxs, rd.col_idxs_idx, "Col indices");
+  print_mpq_vector(rd.values, rd.values_idx, "Values");
+  print_mpq_vector(qsx->rhs, rd.row_idx, "RHS");
+  print_char_vector(qsx->sense, rd.row_idx, "Sense");
+  print_mpq_vector(qsx->range, rd.row_idx, "Range");
+#endif
+
   mpq_QSadd_ranged_rows(prob, rd.row_idx, non_zero_per_row, begin_row_idx,
                         rd.col_idxs, rd.values, qsx->rhs, qsx->sense,
                         qsx->range, NULL);
 
+  assert(rd.row_idx == qsx->n_rows && rd.row_idx == mpq_QSget_rowcount(prob));
   mpq_vector_clear(rd.values, rd.values_idx);
   safe_free(rd.col_idxs);
   safe_free(rd.values);
@@ -947,6 +993,8 @@ static void qsx_build_problem_strict(simplex_solver_t *const solver,
                                      qsx_t *const qsx) {
   add_cols_strict(solver, qsx);
   add_rows_strict(solver, qsx);
+  assert(qsx->n_cols == mpq_QSget_colcount(qsx->prob) - 1);
+  assert(qsx->n_rows == mpq_QSget_rowcount(qsx->prob));
 }
 
 /**
@@ -981,13 +1029,83 @@ static void extract_row_value_strict(simplex_solver_t *const solver,
  */
 static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
                                     external_solution_t *sol) {
-  const mpq_QSprob *prob = &qsx->prob;
 
-  for (int col_idx = 0; col_idx < mpq_QSget_colcount(*prob); col_idx++) {
-    extract_col_value_strict(solver, qsx, sol, col_idx);
+  const int strict_var_idx = qsx->n_cols;
+  bool is_strict_basic = qsx->basis.cstat[strict_var_idx] == QS_COL_BSTAT_BASIC;
+
+  if (is_strict_basic && q_is_pos(&sol->x[strict_var_idx].main)) {
+    int res = mpq_QSchange_bound(qsx->prob, strict_var_idx, 'U', mpq_zeroLpNum);
+    assert(res == 0);
+
+    mpq_t delta;
+    mpq_init(delta);
+    if (__smt2_globals.delta >= 0) {
+      mpq_set_d(delta, __smt2_globals.delta);
+    } else {
+      mpq_set_si(delta, 0, 1);
+    }
+
+    res = QSdelta_solver(qsx->prob, delta, qsx->x, qsx->y, &qsx->basis, NULL,
+                         PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
+    assert(res == 0);
+
+    const external_simplex_status_t status = qsx_status_to_sol_status(qsx);
+    if (status != EXTERNAL_SIMPLEX_FEASIBLE &&
+        status != EXTERNAL_SIMPLEX_INFEASIBLE) {
+      // An error occurred, so we don't have a solution
+      sol->status = status;
+      return;
+    }
+
+    is_strict_basic = qsx->basis.cstat[strict_var_idx] == QS_COL_BSTAT_BASIC;
   }
-  for (int row_idx = 0; row_idx < mpq_QSget_rowcount(*prob); row_idx++) {
-    extract_row_value_strict(solver, qsx, sol, row_idx);
+
+  assert(qsx->status == QS_LP_OPTIMAL || qsx->status == QS_LP_DELTA_OPTIMAL ||
+         qsx->status == QS_LP_FEASIBLE || qsx->status == QS_LP_DELTA_FEASIBLE ||
+         qsx->status == QS_LP_UNBOUNDED || qsx->status == QS_LP_INFEASIBLE);
+
+  // By this point, either the strict variable is basic and at 0,
+  // or it is non-basic and we don't care about its value
+  assert(!is_strict_basic || mpq_is_zero(qsx->x[strict_var_idx]));
+
+  // TODO: for now, disable this. Maybe it could be work activating
+  // if (d_status == QS_LP_INFEASIBLE)
+  // {
+  //   freeBasis();
+  //   int res = mpq_QSdelete_col(d_qsx, numCols() - 1);
+  //   Assert(res == 0);
+  //   mpq_class delta = 0;
+  //   res = QSdelta_solver(d_qsx,
+  //                        delta.get_mpq_t(),
+  //                        static_cast<mpq_t*>(d_x),
+  //                        nullptr,
+  //                        &d_basis,
+  //                        nullptr,
+  //                        PRIMAL_SIMPLEX,
+  //                        &d_status,
+  //                        nullptr,
+  //                        nullptr);
+  //   Assert(res == 0);
+  //   Assert(d_status == QS_LP_INFEASIBLE);
+  //   isStrictBasic = false;
+  // }
+
+  for (int col_idx = 0; col_idx < qsx->n_cols; col_idx++) {
+    extract_col_value(solver, qsx, sol, col_idx);
+  }
+  for (int row_idx = 0; row_idx < qsx->n_rows; row_idx++) {
+    // We already encountered the nonbasic version of this row, we can skip it
+    if (int_bvset_member(&sol->nb_vars, qsx->row_to_var[row_idx]))
+      continue;
+    extract_row_value(solver, qsx, sol, row_idx);
+  }
+
+  // Since we have to split range rows, we have to remove those that we
+  // erroneously marked as basic and then discovered to be nonbasic
+  for (thvar_t v = 0; v < (int32_t)solver->vtbl.nvars; v++) {
+    if (int_bvset_member(&sol->nb_vars, v)) {
+      int_bvset_remove(&sol->b_vars, v);
+    }
   }
 }
 
@@ -1024,31 +1142,8 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   if (new_delta > solver->stats.max_delta)
     solver->stats.max_delta = new_delta;
 
-  switch (qsx->status) {
-  case QS_LP_OPTIMAL:
-  case QS_LP_FEASIBLE:
-  case QS_LP_DELTA_OPTIMAL:
-  case QS_LP_DELTA_FEASIBLE:
-  case QS_LP_UNBOUNDED:
-    solution->nvars = solver->vtbl.nvars;
-    solution->status = is_strict_var_zero(qsx->x[mpq_QSget_colcount(*prob) - 1])
-                           ? EXTERNAL_SIMPLEX_INFEASIBLE
-                           : EXTERNAL_SIMPLEX_FEASIBLE;
-    break;
-  case QS_LP_INFEASIBLE:
-    solution->status = EXTERNAL_SIMPLEX_INFEASIBLE;
-    break;
-  case QS_LP_ITER_LIMIT:
-  case QS_LP_TIME_LIMIT:
-    solution->status = EXTERNAL_SIMPLEX_EXHAUSTED;
-    break;
-  default:
-    trace_printf(solver->core->trace, 10,
-                 "QSopt_ex returned an unexpected status: %d\n", qsx->status);
-    solution->status = EXTERNAL_SIMPLEX_ERROR;
-    break;
-  }
-
+  solution->nvars = solver->vtbl.nvars;
+  solution->status = qsx_status_to_sol_status(qsx);
   mpq_clear(delta);
 }
 
@@ -1070,8 +1165,11 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   else
     qsx_build_problem_strict(solver, &qsx);
 #if 0
-  mpq_QSdump_prob(qsx.prob);
   static int i = 0;
+  mpq_QSdump_prob(qsx.prob);
+  fprintf(stderr, "Problem %d %s: n_cols = %d, n_rows = %d\n", i,
+          __smt2_globals.epsilon_mode ? "epsilon" : "strict", qsx.n_cols,
+          qsx.n_rows);
   char filename[256];
   snprintf(filename, sizeof(filename),
            "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/"

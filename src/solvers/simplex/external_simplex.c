@@ -433,7 +433,7 @@ void mpq_vector_clear(mpq_t v[], const int n) {
 
 bool is_strict_var_zero(mpq_t x) {
   return __smt2_globals.delta < 0 && !__smt2_globals.epsilon_mode &&
-         mpq_cmp_ui(x, 0, 1) == 0;
+         mpq_is_zero(x);
 }
 
 external_simplex_status_t
