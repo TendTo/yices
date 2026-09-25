@@ -1731,6 +1731,8 @@ static void show_simplex_stats(int fd, print_buffer_t *b, simplex_solver_t *solv
   print_string_and_uint32(fd, b, " :simplex-rows ", simplex_num_rows(solver));
   print_string_and_uint32(fd, b, " :simplex-atoms ", simplex_num_atoms(solver));
   print_string_and_uint32(fd, b, " :simplex-pivots ", simplex_num_pivots(solver));
+  print_string_and_float(fd, b, " :simplex-initial-delta ", simplex_initial_delta(solver));
+  print_string_and_uint32(fd, b, " :simplex-epsilon-mode ", simplex_epsilon_mode(solver));
   print_string_and_float(fd, b, " :simplex-max-delta ", simplex_max_delta(solver));
   print_string_and_uint32(fd, b, " :simplex-max-precision ", simplex_max_precision(solver));
   print_string_and_uint32(fd, b, " :simplex-delta-calls ", simplex_delta_calls(solver));

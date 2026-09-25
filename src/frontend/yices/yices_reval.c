@@ -2154,6 +2154,8 @@ static void show_simplex_stats(simplex_stats_t *stat) {
   printf(" rows in final tableau   : %"PRIu32"\n", stat->num_end_rows);
   printf(" calls to make_feasible  : %"PRIu32"\n", stat->num_make_feasible);
   printf(" pivots                  : %"PRIu32"\n", stat->num_pivots);
+  printf(" initial delta           : %.2f\n", stat->initial_delta);
+  printf(" epsilon mode            : %"PRIu32"\n", stat->epsilon_mode);
   printf(" max delta               : %.2f\n", stat->max_delta);
   printf(" max precision           : %"PRIu32"\n", stat->max_precision);
   printf(" delta calls             : %"PRIu32"\n", stat->delta_calls);

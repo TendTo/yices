@@ -631,6 +631,8 @@ static void init_simplex_statistics(simplex_stats_t *stat) {
   stat->num_blands = 0;
   stat->num_conflicts = 0;
 
+  stat->initial_delta = __smt2_globals.delta;
+  stat->epsilon_mode = __smt2_globals.epsilon_mode;
   stat->max_delta = 0.0;
   stat->max_precision = 0;
   stat->delta_calls = 0;

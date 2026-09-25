@@ -464,6 +464,14 @@ static inline uint32_t simplex_num_interface_lemmas(simplex_solver_t *solver) {
   return solver->stats.num_interface_lemmas;
 }
 
+static inline double simplex_initial_delta(simplex_solver_t *solver) {
+  return solver->stats.initial_delta;
+}
+
+static inline uint32_t simplex_epsilon_mode(simplex_solver_t *solver) {
+  return solver->stats.epsilon_mode;
+}
+
 static inline double simplex_max_delta(simplex_solver_t *solver) {
   return solver->stats.max_delta;
 }

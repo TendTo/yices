@@ -640,6 +640,8 @@ typedef struct simplex_stats_s {
   uint32_t num_conflicts;
 
   // dlinear statistics
+  double initial_delta;
+  uint32_t epsilon_mode;
   double max_delta;
   uint32_t max_precision;
   uint32_t delta_calls;
