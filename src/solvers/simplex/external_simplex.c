@@ -128,6 +128,8 @@ void get_bound(const simplex_solver_t *const solver, const thvar_t v,
     mpq_init(bound->val);
     mpq_set(bound->val, get_gmp(val));
   } else {
+    // Copy the mpq_t, but do not take ownership.
+    // Therefore, there is no need to free this mpq_t later
     memcpy(bound->val, get_gmp(val), sizeof(mpq_t));
   }
 

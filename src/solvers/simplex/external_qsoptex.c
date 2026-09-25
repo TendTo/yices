@@ -60,12 +60,13 @@ static bool var_in_columns(const qsx_t *const qsx, const thvar_t v) {
  * the LP model.
  * We only care about free variables, i.e., those that appear
  * in the SMT definition.
- * @param vtbl The arithmetic variable table containing the variable definition.
+ * @param solver The simplex solver containing the variable table and bounds.
  * @param v The theory variable to inspect.
  * @return true if the variable is free; otherwise false.
  */
-static bool var_is_valid_column(arith_vartable_t *const vtbl, const thvar_t v) {
-  if (arith_var_is_free(vtbl, v))
+static bool var_is_valid_column(simplex_solver_t *const solver,
+                                const thvar_t v) {
+  if (arith_var_is_free(&solver->vtbl, v))
     return true;
   return false;
 }
@@ -75,15 +76,15 @@ static bool var_is_valid_column(arith_vartable_t *const vtbl, const thvar_t v) {
  * the LP model.
  * We only care about polynomials that are not constants.
  * E.g., p := a.x or p := a.x + c, but not p := c, where c is a constant.
- * @param vtbl The arithmetic variable table containing the variable definition.
+ * @param solver The simplex solver containing the variable table and bounds.
  * @param v The theory variable to inspect.
  * @return true if the variable is a polynomial-defined non-constant row; false
  * otherwise.
  */
-static bool var_is_valid_row(arith_vartable_t *const vtbl, const thvar_t v) {
-  if (!arith_var_def_is_poly(vtbl, v))
+static bool var_is_valid_row(simplex_solver_t *const solver, const thvar_t v) {
+  if (!arith_var_def_is_poly(&solver->vtbl, v))
     return false;
-  const polynomial_t *const p = arith_var_poly_def(vtbl, v);
+  const polynomial_t *const p = arith_var_poly_def(&solver->vtbl, v);
   assert(p);
   return !(p->nterms == 1 && p->mono[0].var == const_idx);
 }
@@ -226,7 +227,7 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
   for (thvar_t v = 0; v < num_vars; v++) {
 
     // Free variables. They come from the SMT input. Encode them as columns.
-    if (var_is_valid_column(&solver->vtbl, v)) {
+    if (var_is_valid_column(solver, v)) {
       bound_type_t lb, ub;
       get_bound(solver, v, true, &lb);
       get_bound(solver, v, false, &ub);
@@ -299,7 +300,7 @@ static int monomials_to_row(simplex_solver_t *const solver,
       if (bounded)
         mpq_q_sub(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
     } else if (var_in_columns(qsx, x)) {
-      assert(var_is_valid_column(&solver->vtbl, x));
+      assert(var_is_valid_column(solver, x));
       // Add var coefficient
       num_non_zeros++;
       row_data->col_idxs[row_data->col_idxs_idx++] = qsx->var_to_col[x];
@@ -352,7 +353,7 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   for (thvar_t v = 0; v < n_vars; v++) {
     const int r = row_data.row_idx;
     // Skip structural variables and constants
-    if (!var_is_valid_row(&solver->vtbl, v)) {
+    if (!var_is_valid_row(solver, v)) {
       continue;
     }
 
