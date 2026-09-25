@@ -942,17 +942,17 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
       if (has_lb(solver, v) && has_ub(solver, v)) {
         // Insert all cols (except strict col, if present)
         begin_row_idx[rd.row_idx] = rd.col_idxs_idx;
-        const int max_idx_offset = is_lb_strict ? 1 : 0;
-        for (int i = rd.col_idxs_idx - num_non_zeros;
-             i < rd.col_idxs_idx - max_idx_offset; i++) {
+        // Go back and re-add the same values we already added for the lower-bound
+        const int prev_row_non_zeros = non_zero_per_row[rd.row_idx - 1];
+        const int max_idx_offset = rd.col_idxs_idx - (is_lb_strict ? 1 : 0);
+        for (int i = rd.col_idxs_idx - prev_row_non_zeros; i < max_idx_offset;
+             i++) {
           rd.col_idxs[rd.col_idxs_idx++] = rd.col_idxs[i];
-        }
-        for (int i = rd.values_idx - num_non_zeros;
-             i < rd.values_idx - max_idx_offset; i++) {
           mpq_init(rd.values[rd.values_idx]);
           mpq_set(rd.values[rd.values_idx++], rd.values[i]);
         }
-        non_zero_per_row[rd.row_idx] = num_non_zeros - max_idx_offset;
+        non_zero_per_row[rd.row_idx] =
+            prev_row_non_zeros - (is_lb_strict ? 1 : 0);
       }
 
       if (ub.is_finite) {
@@ -1067,6 +1067,7 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
   bool is_strict_basic = qsx->basis.cstat[strict_var_idx] == QS_COL_BSTAT_BASIC;
 
   // TODO: we may skip ensuring that the strict variable is 0 entirely
+#if 1
   if (is_strict_basic && mpq_is_pos(qsx->x[strict_var_idx])) {
     [[maybe_unused]] int res =
         mpq_QSchange_bound(qsx->prob, strict_var_idx, 'U', mpq_zeroLpNum);
@@ -1083,6 +1084,7 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
     res = QSdelta_solver(qsx->prob, delta, qsx->x, qsx->y, &qsx->basis, NULL,
                          PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
     assert(res == 0);
+    mpq_clear(delta);
 
     const external_simplex_status_t status = qsx_status_to_sol_status(qsx);
     if (status != EXTERNAL_SIMPLEX_FEASIBLE &&
@@ -1124,6 +1126,7 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
   //   Assert(d_status == QS_LP_INFEASIBLE);
   //   isStrictBasic = false;
   // }
+#endif
 
   for (int col_idx = 0; col_idx < qsx->n_cols; col_idx++) {
     extract_col_value(solver, qsx, sol, col_idx);
