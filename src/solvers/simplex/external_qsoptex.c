@@ -42,8 +42,11 @@ typedef struct {
   QSbasis basis; ///< Basis information for the solution
 } qsx_t;
 
-static const int pivot_threshold = 10000;
+/** Maximum number of pivots before LP termination */
+static const int pivot_threshold = 1000000;
+/** Global flag indicating whether the QSopt_ex runtime has been initialized */
 static bool qsx_started = false;
+/** Global variable representing the rational number -1 for LP computations */
 static mpq_t mpq_negoneLpNum;
 
 /**
@@ -1073,11 +1076,7 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
 
     mpq_t delta;
     mpq_init(delta);
-    if (__smt2_globals.delta >= 0) {
-      mpq_set_d(delta, __smt2_globals.delta);
-    } else {
-      mpq_set_si(delta, 0, 1);
-    }
+    mpq_set_d(delta, __smt2_globals.delta);
 
     res = QSdelta_solver(qsx->prob, delta, qsx->x, NULL, &qsx->basis, NULL,
                          PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
@@ -1157,9 +1156,11 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   // Update the statistics
   if (precision > solver->stats.max_precision)
     solver->stats.max_precision = precision;
-  const double new_delta = mpq_get_d(delta);
-  if (new_delta > solver->stats.max_delta)
-    solver->stats.max_delta = new_delta;
+  if (__smt2_globals.delta >= 0) {
+    const double new_delta = mpq_get_d(delta);
+    if (new_delta > solver->stats.max_delta)
+      solver->stats.max_delta = new_delta;
+  }
 
   solution->nvars = solver->vtbl.nvars;
   solution->status = qsx_status_to_sol_status(qsx);

@@ -7,30 +7,20 @@
  */
 #include "external_simplex.h"
 
-#include "../egraph/egraph_base_types.h"
 #include "frontend/smt2/smt2_commands.h"
-#include "matrices.h"
-#include "simplex.h"
-#include "simplex_printer.h"
-#include "simplex_types.h"
+#include "solvers/egraph/egraph_base_types.h"
 #include "solvers/simplex/external_qsoptex.h"
+#include "solvers/simplex/matrices.h"
+#include "solvers/simplex/simplex_printer.h"
+#include "solvers/simplex/simplex_types.h"
 #include "solvers/simplex/simplex_utils.h"
 #include "terms/rationals.h"
 
 #include <inttypes.h>
 
 #include "io/tracer.h"
-#include "solvers/egraph/theory_explanations.h"
-#include "solvers/simplex/integrality_constraints.h"
-#include "solvers/simplex/simplex.h"
 #include "terms/mpq_stores.h"
-#include "terms/rational_hash_maps.h"
-#include "utils/assert_utils.h"
 #include "utils/bitvectors.h"
-#include "utils/dep_tables.h"
-#include "utils/dprng.h"
-#include "utils/hash_functions.h"
-#include "utils/int_hash_classes.h"
 
 #include <assert.h>
 #include <qsopt_ex/QSopt_ex.h>
@@ -169,7 +159,6 @@ static void update_nb_value(simplex_solver_t *const solver,
 }
 
 static void sync_infeasible_vars(simplex_solver_t *const solver) {
-  // print_int_heap(&solver->infeasible_vars);
   reset_int_heap(&solver->infeasible_vars);
 
   for (uint32_t i = 0; i < solver->matrix.nrows; i++) {
@@ -179,8 +168,6 @@ static void sync_infeasible_vars(simplex_solver_t *const solver) {
       int_heap_add(&solver->infeasible_vars, x);
     }
   }
-  // printf("Synced infeasible vars: ");
-  // print_int_heap(&solver->infeasible_vars);
 }
 
 /*
