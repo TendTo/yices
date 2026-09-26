@@ -255,7 +255,10 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   // to collect the value of the strict var, if needed.
   // There is no need do add it anywhere else
   qsx->x = safe_malloc((qsx->n_cols + 1) * sizeof(mpq_t));
-  qsx->y = safe_malloc(qsx->n_rows * sizeof(mpq_t));
+  // We do not allocate the y array.
+  // Instead, we link it to the existing array in the LP problem,
+  // after we solve an instance
+  qsx->y = NULL;
   qsx->range = safe_malloc(qsx->n_rows * sizeof(mpq_t));
   qsx->rhs = safe_malloc(qsx->n_rows * sizeof(mpq_t));
   qsx->sense = safe_malloc(qsx->n_rows * sizeof(char));
@@ -269,7 +272,6 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
 
   for (uint32_t i = 0; i < qsx->n_rows; i++) {
     qsx->row_to_var[i] = -1;
-    mpq_init(qsx->y[i]);
     mpq_init(qsx->range[i]);
     mpq_init(qsx->rhs[i]);
   }
@@ -287,7 +289,6 @@ static void qsx_clear(qsx_t *const qsx) {
   basis_clear(&qsx->basis);
   mpq_QSfree_prob(qsx->prob);
   mpq_vector_clear(qsx->x, qsx->n_cols + 1);
-  mpq_vector_clear(qsx->y, qsx->n_rows);
   mpq_vector_clear(qsx->range, qsx->n_rows);
   mpq_vector_clear(qsx->rhs, qsx->n_rows);
   safe_free(qsx->col_to_var);
@@ -295,7 +296,6 @@ static void qsx_clear(qsx_t *const qsx) {
   safe_free(qsx->var_to_col);
   safe_free(qsx->var_to_row);
   safe_free(qsx->x);
-  safe_free(qsx->y);
   safe_free(qsx->range);
   safe_free(qsx->rhs);
   safe_free(qsx->sense);
@@ -321,7 +321,6 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
   // variable
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
   for (thvar_t v = 0; v < num_vars; v++) {
-
     // Free variables. They come from the SMT input. Encode them as columns.
     if (var_is_valid_column(solver, v)) {
       bound_type_t lb, ub;
@@ -790,7 +789,6 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   // variable
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
   for (thvar_t v = 0; v < num_vars; v++) {
-
     // Free variables. They come from the SMT input. Encode them as columns.
     if (var_is_valid_column(solver, v)) {
       bound_type_t lb, ub;
@@ -943,7 +941,7 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
       if (has_lb(solver, v) && has_ub(solver, v)) {
         // Insert all cols (except strict col, if present)
         begin_row_idx[rd.row_idx] = rd.col_idxs_idx;
-        // Go back and re-add the same values we already added for the lower-bound
+        // Go back and add the same values we already added for the lower-bound
         const int prev_row_non_zeros = non_zero_per_row[rd.row_idx - 1];
         const int max_idx_offset = rd.col_idxs_idx - (is_lb_strict ? 1 : 0);
         for (int i = rd.col_idxs_idx - prev_row_non_zeros; i < max_idx_offset;
@@ -1063,7 +1061,6 @@ static void qsx_build_problem_strict(simplex_solver_t *const solver,
  */
 static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
                                     external_solution_t *sol) {
-
   const int strict_var_idx = qsx->n_cols;
   bool is_strict_basic = qsx->basis.cstat[strict_var_idx] == QS_COL_BSTAT_BASIC;
 
@@ -1082,9 +1079,10 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
       mpq_set_si(delta, 0, 1);
     }
 
-    res = QSdelta_solver(qsx->prob, delta, qsx->x, qsx->y, &qsx->basis, NULL,
+    res = QSdelta_solver(qsx->prob, delta, qsx->x, NULL, &qsx->basis, NULL,
                          PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
     assert(res == 0);
+    qsx->y = qsx->prob->lp->pIpiz;
     mpq_clear(delta);
 
     const external_simplex_status_t status = qsx_status_to_sol_status(qsx);
@@ -1102,31 +1100,12 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
          qsx->status == QS_LP_FEASIBLE || qsx->status == QS_LP_DELTA_FEASIBLE ||
          qsx->status == QS_LP_UNBOUNDED || qsx->status == QS_LP_INFEASIBLE);
 
-  // By this point, either the strict variable is basic and at 0,
-  // or it is non-basic and we don't care about its value
-  assert(!is_strict_basic || mpq_is_zero(qsx->x[strict_var_idx]));
-
-  // TODO: for now, disable this. Maybe it could be work activating
-  // if (d_status == QS_LP_INFEASIBLE)
-  // {
-  //   freeBasis();
-  //   int res = mpq_QSdelete_col(d_qsx, numCols() - 1);
-  //   Assert(res == 0);
-  //   mpq_class delta = 0;
-  //   res = QSdelta_solver(d_qsx,
-  //                        delta.get_mpq_t(),
-  //                        static_cast<mpq_t*>(d_x),
-  //                        nullptr,
-  //                        &d_basis,
-  //                        nullptr,
-  //                        PRIMAL_SIMPLEX,
-  //                        &d_status,
-  //                        nullptr,
-  //                        nullptr);
-  //   Assert(res == 0);
-  //   Assert(d_status == QS_LP_INFEASIBLE);
-  //   isStrictBasic = false;
-  // }
+  // By this point, if we have a feasible solution,
+  // the strict variable is either basic and at 0,
+  // or it is non-basic and we don't care about its value.
+  // If there is no feasible solution, all bets are off.
+  assert(sol->status != EXTERNAL_SIMPLEX_FEASIBLE || !is_strict_basic ||
+         mpq_is_zero(qsx->x[strict_var_idx]));
 #endif
 
   for (int col_idx = 0; col_idx < qsx->n_cols; col_idx++) {
@@ -1170,9 +1149,10 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   mpq_set_d(delta, __smt2_globals.delta);
 
   [[maybe_unused]] const int res =
-      QSdelta_solver(*prob, delta, qsx->x, qsx->y, &qsx->basis, &precision,
+      QSdelta_solver(*prob, delta, qsx->x, NULL, &qsx->basis, &precision,
                      PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
   assert(res == 0);
+  qsx->y = qsx->prob->lp->pIpiz;
 
   // Update the statistics
   if (precision > solver->stats.max_precision)
