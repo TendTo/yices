@@ -309,8 +309,13 @@ static void print_help(const char *progname) {
          "                              (mutually exclusive with --mcsat)\n"
          "    --mcsat-help              Show the MCSat options\n"
          "    --ef-help                 Show the EF options\n"
-	 "    --nthreads=<number of threads>  Specify the number of threads (default = 0 = main thread only)\n"
-	 "    -n <number of threads>\n"
+         "    --external-lp-solver=<solver>  Select the external LP solver. Can be qsoptex or soplex (default = qsoptex)\n"
+         "    --pivot-threshold=<value> Number of pivots before switching to the external LP solver. (default = uint32_max)\n"
+	       "    --epsilon                 Use epsilon in the model instead of strict-var mode (default = false)\n"
+	       "    --delta=<value>           Make the external LP solver look for delta-feasible solutions up to <value>.\n"
+         "                              A negative value disables restores exact feasibility. (default = -1.0)\n"
+	       "    --nthreads=<number of threads>  Specify the number of threads (default = 0 = main thread only)\n"
+	       "    -n <number of threads>\n"
          "\n"
          "For bug reports and other information, please see http://yices.csl.sri.com/\n");
   fflush(stdout);
