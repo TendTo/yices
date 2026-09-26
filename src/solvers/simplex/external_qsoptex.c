@@ -170,6 +170,22 @@ qsx_status_to_sol_status(const qsx_t *const qsx) {
   }
 }
 
+static bool should_update_max_delta(const qsx_t *const qsx) {
+  if (__smt2_globals.delta < 0)
+    return false;
+  switch (qsx->status) {
+  case QS_LP_OPTIMAL:
+  case QS_LP_FEASIBLE:
+  case QS_LP_DELTA_OPTIMAL:
+  case QS_LP_DELTA_FEASIBLE:
+  case QS_LP_UNBOUNDED:
+    return !is_strict_var_zero(qsx->x[qsx->n_cols]);
+    break;
+  default:
+    return false;
+  }
+}
+
 /**
  * Creates a new QSopt_ex LP problem wrapper and configures solver parameters.
  * @param qsx The wrapper to initialize.
@@ -1156,7 +1172,7 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   // Update the statistics
   if (precision > solver->stats.max_precision)
     solver->stats.max_precision = precision;
-  if (__smt2_globals.delta >= 0) {
+  if (should_update_max_delta(qsx)) {
     const double new_delta = mpq_get_d(delta);
     if (new_delta > solver->stats.max_delta)
       solver->stats.max_delta = new_delta;
