@@ -10,6 +10,7 @@
 #include "frontend/smt2/smt2_commands.h"
 #include "solvers/egraph/egraph_base_types.h"
 #include "solvers/simplex/external_qsoptex.h"
+#include "solvers/simplex/external_soplex.h"
 #include "solvers/simplex/matrices.h"
 #include "solvers/simplex/simplex_printer.h"
 #include "solvers/simplex/simplex_types.h"
@@ -23,7 +24,6 @@
 #include "utils/bitvectors.h"
 
 #include <assert.h>
-#include <qsopt_ex/QSopt_ex.h>
 
 external_solution_t new_external_solution(const uint32_t nvars) {
   external_solution_t sol;
@@ -121,6 +121,43 @@ void get_bound(const simplex_solver_t *const solver, const thvar_t v,
     // Copy the mpq_t, but do not take ownership.
     // Therefore, there is no need to free this mpq_t later
     memcpy(bound->val, get_gmp(val), sizeof(mpq_t));
+  }
+
+  if (__smt2_globals.epsilon_mode && bound->is_strict) {
+    // Adjust the bounds with epsilon
+    if (is_lower_bound) {
+      mpq_add_si(bound->val, epsilon_num, epsilon_den);
+    } else {
+      mpq_sub_si(bound->val, epsilon_num, epsilon_den);
+    }
+  }
+}
+
+void get_bound_copy(const simplex_solver_t *const solver, const thvar_t v,
+                    const bool is_lower_bound, bound_type_t *bound) {
+  const int32_t bound_idx = is_lower_bound ? solver->vtbl.lower_index[v]
+                                           : solver->vtbl.upper_index[v];
+  xrational_t *const bounds = solver->bstack.bound;
+  assert(bound); // Bound must be non-null
+
+  bound->free = false;
+  bound->is_finite = bound_idx > -1;
+  bound->is_strict =
+      __smt2_globals.delta < 0 &&
+      (bound->is_finite ? !xq_is_rational(&bounds[bound_idx]) : false);
+
+  if (!bound->is_finite)
+    return;
+
+  assert(bound_idx >= 0 && bound_idx < solver->bstack.size);
+  const rational_t *val = &bounds[bound_idx].main;
+
+  bound->free = true;
+  mpq_init(bound->val);
+  if (is_rat32(val)) { // Need to convert to GMP
+    mpq_set_int32(bound->val, get_num(val), get_den(val));
+  } else {
+    mpq_set(bound->val, get_gmp(val));
   }
 
   if (__smt2_globals.epsilon_mode && bound->is_strict) {
@@ -423,6 +460,21 @@ bool is_strict_var_zero(mpq_t x) {
          mpq_is_zero(x);
 }
 
+#if 0
+static void print_ctx_parameters() {
+  const ctx_param_t *const params = &__smt2_globals.ctx_parameters;
+  printf("CTX parameters:\n");
+  printf("  arith_elim: %d\n", params->arith_elim);
+  printf("  bvarith_elim: %d\n", params->bvarith_elim);
+  printf("  eq_abstraction: %d\n", params->eq_abstraction);
+  printf("  keep_ite: %d\n", params->keep_ite);
+  printf("  splx_eager_lemmas: %d\n", params->splx_eager_lemmas);
+  printf("  splx_periodic_icheck: %d\n", params->splx_periodic_icheck);
+  printf("  flatten_or: %d\n", params->flatten_or);
+  printf("  var_elim: %d\n", params->var_elim);
+}
+#endif
+
 external_simplex_status_t
 simplex_check_feasibility_external(simplex_solver_t *solver) {
   if (!solver->tableau_ready)
@@ -450,8 +502,7 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
     qsx_solve(solver, &solution);
     break;
   case EXTERNAL_LP_SOLVER_SOPLEX:
-    printf("SoPlex is not yet implemented, using QSopt_ex instead\n");
-    abort();
+    spx_solve(solver, &solution);
     break;
   default:
     printf("Unknown external solver: %d\n", __smt2_globals.external_lp_solver);

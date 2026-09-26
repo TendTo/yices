@@ -118,6 +118,9 @@ typedef void lp_algebraic_number_t;
 #ifdef HAVE_QSOPTEX
 #include "solvers/simplex/external_qsoptex.h"
 #endif
+#ifdef HAVE_SOPLEX
+#include "solvers/simplex/external_soplex.h"
+#endif
 
 
 #include "mt/thread_macros.h"
@@ -1161,7 +1164,7 @@ EXPORTED void yices_exit(void) {
   global_qsx_clear();
 #endif
 #ifdef HAVE_SOPLEX
-
+  global_spx_clear();
 #endif
 }
 

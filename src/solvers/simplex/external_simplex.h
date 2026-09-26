@@ -72,12 +72,15 @@ bool is_strict_var_zero(mpq_t x);
  */
 void get_bound(const simplex_solver_t *solver, thvar_t v, bool is_lower_bound,
                bound_type_t *bound);
+void get_bound_copy(const simplex_solver_t *solver, thvar_t v,
+                    bool is_lower_bound, bound_type_t *bound);
 
 external_import_status_t import_external_solution(simplex_solver_t *solver,
                                                   external_solution_t *sol);
 
 // TODO: REMOVE ALL DEBUG PRINTS
-static inline void print_int_vector(const int32_t v[], const int n, const char *name) {
+static inline void print_int_vector(const int32_t v[], const int n,
+                                    const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
     return;
@@ -92,7 +95,8 @@ static inline void print_int_vector(const int32_t v[], const int n, const char *
   printf("]\n");
 }
 
-static inline void print_mpq_vector(const mpq_t v[], const int n, const char *name) {
+static inline void print_mpq_vector(const mpq_t v[], const int n,
+                                    const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
     return;
@@ -108,7 +112,7 @@ static inline void print_mpq_vector(const mpq_t v[], const int n, const char *na
 }
 
 static inline void print_rational_vector(const rational_t v[], const int n,
-                                  const char *name) {
+                                         const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
     return;
@@ -124,7 +128,7 @@ static inline void print_rational_vector(const rational_t v[], const int n,
 }
 
 static inline void print_xrational_vector(xrational_t v[], const int n,
-                                   const char *name) {
+                                          const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
     return;
@@ -139,7 +143,8 @@ static inline void print_xrational_vector(xrational_t v[], const int n,
   printf("]\n");
 }
 
-static inline void print_char_vector(const char v[], const int n, const char *name) {
+static inline void print_char_vector(const char v[], const int n,
+                                     const char *name) {
   if (v == NULL) {
     printf("%s: NULL\n", name);
     return;
