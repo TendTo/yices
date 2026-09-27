@@ -460,7 +460,7 @@ bool is_strict_var_zero(mpq_t x) {
          mpq_is_zero(x);
 }
 
-#if 0
+#if 0 && !defined(NDEBUG)
 static void print_ctx_parameters() {
   const ctx_param_t *const params = &__smt2_globals.ctx_parameters;
   printf("CTX parameters:\n");
@@ -482,7 +482,7 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
 
   solver->stats.external_calls++;
 
-#if 0
+#if 0 && !defined(NDEBUG)
   printf("\n\n*** SIMPLEX START ***\n");
   print_simplex_vars_summary(stdout, solver);
   printf("==== Pivots ====\n");

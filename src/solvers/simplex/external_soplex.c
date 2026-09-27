@@ -541,8 +541,10 @@ spx_status_to_sol_status(const spx_t *const spx) {
   switch (spx->status) {
   case OPTIMAL:
   case UNBOUNDED:
-    return is_strict_var_zero(spx->x[spx->n_cols]) ? EXTERNAL_SIMPLEX_INFEASIBLE
-                                                   : EXTERNAL_SIMPLEX_FEASIBLE;
+    return !__smt2_globals.epsilon_mode && spx->x &&
+                   is_strict_var_zero(spx->x[spx->n_cols])
+               ? EXTERNAL_SIMPLEX_INFEASIBLE
+               : EXTERNAL_SIMPLEX_FEASIBLE;
     break;
   case INFEASIBLE:
     return EXTERNAL_SIMPLEX_INFEASIBLE;
@@ -763,10 +765,10 @@ typedef struct row_accumulator_s {
 } row_accumulator_t;
 
 static void row_accumulator_init(row_accumulator_t *const accumulator,
-                                 const int n_cols) {
+                                 int *const values_idxs, const int n_cols) {
   accumulator->values = safe_malloc(n_cols * sizeof(mpq_t));
   memset(accumulator->values, 0, n_cols * sizeof(mpq_t));
-  accumulator->values_idxs = safe_malloc(n_cols * sizeof(int));
+  accumulator->values_idxs = values_idxs;
   accumulator->n_values = 0;
 }
 
@@ -778,9 +780,7 @@ static void row_accumulator_clear(row_accumulator_t *const accumulator,
     }
   }
   safe_free(accumulator->values);
-  safe_free(accumulator->values_idxs);
   accumulator->values = NULL;
-  accumulator->values_idxs = NULL;
   accumulator->n_values = 0;
 }
 
@@ -873,22 +873,22 @@ static int polynomial_to_row(simplex_solver_t *const solver,
                              const spx_t *const spx, const thvar_t v,
                              row_data_t *const row_data) {
   row_accumulator_t accumulator;
-  row_accumulator_init(&accumulator, spx->n_cols);
+  // By passing col_idxs to the accumulator,
+  // we can avoid allocating a new array for the accumulator's indices.
+  row_accumulator_init(&accumulator, row_data->col_idxs, spx->n_cols);
   monomials_to_row(solver, spx, v, row_data, &accumulator, NULL);
   const int num_non_zeros = accumulator.n_values;
 
   for (int i = 0; i < num_non_zeros; i++) {
     const int col_idx = accumulator.values_idxs[i];
-    row_data->col_idxs[i] = col_idx;
-    // Transfer ownership to the row_data values array
-    memcpy(row_data->values[i], accumulator.values[col_idx], sizeof(mpq_t));
+    mpq_set(row_data->values[i], accumulator.values[col_idx]);
   }
 
   // We do not need to clear the mpq_t values in the accumulator
   // because they have been assigned to the row_data values array,
   // which will be cleared later.
-  row_accumulator_clear(&accumulator, false);
-  return num_non_zeros;
+  row_accumulator_clear(&accumulator, true);
+  return num_non_zeros; // Return the next row index
 }
 
 /**
@@ -1107,7 +1107,7 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
 
   // At the end, add the strict variable column,
   // which is used to encode the strict bounds
-  SoPlex_addColToLpProblemRational(spx->lp, NULL, NULL, 0, mpq_zeroLpNum,
+  SoPlex_addColToLpProblemRational(spx->lp, NULL, NULL, 0, mpq_negoneLpNum,
                                    mpq_zeroLpNum, mpq_oneLpNum);
 }
 
@@ -1423,7 +1423,7 @@ static void spx_solve_lp(simplex_solver_t *const solver, spx_t *const spx,
       solver->stats.max_delta = max_row_violation;
     if (max_bound_violation > 0 || max_row_violation > 0)
       solver->stats.delta_calls++;
-#if 0
+#if 0 && !defined(NDEBUG)
     printf("Max bound violation: %g\n", max_bound_violation);
     printf("Max row violation: %g\n", max_row_violation);
 #endif
@@ -1460,27 +1460,20 @@ void spx_solve(simplex_solver_t *solver, external_solution_t *sol) {
     spx_build_problem_epsilon(solver, &spx);
   else
     spx_build_problem_strict(solver, &spx);
-#if 0
+#if 0 && !defined(NDEBUG)
   static int i = 0;
-  mpq_QSdump_prob(spx.prob);
   fprintf(stderr, "Problem %d %s: n_cols = %d, n_rows = %d\n", i,
           __smt2_globals.epsilon_mode ? "epsilon" : "strict", spx.n_cols,
           spx.n_rows);
   char filename[256];
   snprintf(filename, sizeof(filename),
            "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/"
-           "qsproblem_%d_%s.lp",
+           "spxproblem_%d_%s.lp",
            i, __smt2_globals.epsilon_mode ? "epsilon" : "strict");
-  mpq_QSwrite_prob(spx.prob, filename, "LP");
+  SoPlex_writeFileReal(spx.prob, filename);
   i++;
 #endif
   const double start_solve = get_cpu_time();
-
-  {
-    spx_clear(&spx);
-    sol->status = EXTERNAL_SIMPLEX_ERROR;
-    return;
-  }
 
   spx_solve_lp(solver, &spx, sol);
   // Only extract a solution if the external solver found a valid one

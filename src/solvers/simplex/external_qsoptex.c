@@ -1036,7 +1036,7 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
     rd.row_idx++;
   }
 
-#if 0
+#if 0 && !defined(NDEBUG)
   printf("Strict-mode LP has %d rows and %d columns\n", qsx->n_rows,
          qsx->n_cols);
   printf("Added %d rows to the strict-mode LP\n", rd.row_idx);
@@ -1210,7 +1210,7 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
     qsx_build_problem_epsilon(solver, &qsx);
   else
     qsx_build_problem_strict(solver, &qsx);
-#if 0
+#if 0 && !defined(NDEBUG)
   static int i = 0;
   mpq_QSdump_prob(qsx.prob);
   fprintf(stderr, "Problem %d %s: n_cols = %d, n_rows = %d\n", i,
