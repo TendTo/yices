@@ -189,7 +189,9 @@ static void update_nb_value(simplex_solver_t *const solver,
     if (!xq_eq(sol->x + v, arith_var_value(&solver->vtbl, v))) {
       // We are dealing with a free variable.
       // Just assign it the value from the solution.
-      assert(!has_any_bound(solver, v));
+      // In SoPlex, a variable made free by moving its strict bounds
+      // to the constraints may be set to Zero
+      // assert(!has_any_bound(solver, v));
       update_non_basic_var_value(solver, v, sol->x + v);
     }
   }
@@ -311,7 +313,8 @@ import_external_solution(simplex_solver_t *const solver,
     if (matrix_is_nonbasic_var(matrix, v) && int_bvset_member(new_nb, v)) {
       assert(value_satisfies_bounds(solver, v));
       assert(variable_at_lower_bound(solver, v) ||
-             variable_at_upper_bound(solver, v) || !has_any_bound(solver, v));
+             variable_at_upper_bound(solver, v) || !has_any_bound(solver, v) ||
+             xq_is_zero(arith_var_value(&solver->vtbl, v)));
     } else if (matrix_is_basic_var(matrix, v)) {
       if (!value_satisfies_bounds(solver, v)) {
         assert(int_heap_member(&solver->infeasible_vars, v));
