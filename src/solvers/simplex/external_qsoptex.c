@@ -22,7 +22,7 @@
 #include <stdbool.h>
 
 typedef struct {
-  mpq_QSprob prob;     ///< The QSopt_ex LP problem
+  rat_QSprob prob;     ///< The QSopt_ex LP problem
   SolverStatus status; ///< Status of the LP problem after solving
 
   thvar_t *col_to_var; ///< Map from column index in the LP to theory var
@@ -34,11 +34,11 @@ typedef struct {
   int32_t n_cols; ///< Number of estimated LP columns
   int32_t n_rows; ///< Number of estimated LP rows
 
-  mpq_t *rhs;    ///< Right-hand side of the constraints
-  mpq_t *range;  ///< Range of the constraints
+  rat_t *rhs;    ///< Right-hand side of the constraints
+  rat_t *range;  ///< Range of the constraints
   char *sense;   ///< Sense of the constraints ('E', 'G', 'L', or 'R')
-  mpq_t *x;      ///< Temporary rational for storing the solution
-  mpq_t *y;      ///< Temporary rational for storing the dual solution
+  rat_t *x;      ///< Temporary rational for storing the solution
+  rat_t *y;      ///< Temporary rational for storing the dual solution
   QSbasis basis; ///< Basis information for the solution
 } qsx_t;
 
@@ -47,7 +47,94 @@ static const int pivot_threshold = 1000000;
 /** Global flag indicating whether the QSopt_ex runtime has been initialized */
 static bool qsx_started = false;
 /** Global variable representing the rational number -1 for LP computations */
-static mpq_t mpq_negoneLpNum;
+static rat_t rat_negoneLpNum;
+
+static inline void rat_set_q(rat_t rat, const rational_t *const q) {
+  if (is_rat32(q)) {
+    rat_set_int32(rat, get_num(q), get_den(q));
+  } else {
+    rat_set_mpq(rat, get_gmp(q));
+  }
+}
+
+static inline void q_set_rat(rational_t *const q, const rat_t rat) {
+  if (rat_is_rat32(rat)) {
+    q_set_int32(q, rat_get_num(rat), rat_get_den(rat));
+  } else {
+    q_set_mpq(q, rat_get_mpq(rat));
+  }
+}
+
+static inline void xq_set_rat(xrational_t *r, const rat_t rat) {
+  q_set_rat(&r->main, rat);
+  q_clear(&r->delta);
+}
+
+static inline bool is_strict_var_zero(rat_t x) {
+  return __smt2_globals.delta < 0 && !__smt2_globals.epsilon_mode &&
+         rat_is_zero(x);
+}
+
+static inline void rat_add_q(rat_t rat, const rational_t *q) {
+  if (is_rat32(q)) {
+    rat_add_si(rat, get_num(q), get_den(q));
+  } else if (rat_is_gmp(rat)) {
+    mpq_sub(rat_get_mpq(rat), rat_get_mpq(rat), get_gmp(q));
+  } else {
+    rat_t temp;
+    rat_init(temp);
+    rat_set_mpq(temp, get_gmp(q));
+    rat_add_self(rat, temp);
+    rat_clear(temp);
+  }
+}
+static inline void rat_sub_q(rat_t rat, const rational_t *q) {
+  if (is_rat32(q)) {
+    rat_sub_si(rat, get_num(q), get_den(q));
+  } else if (rat_is_gmp(rat)) {
+    mpq_sub(rat_get_mpq(rat), rat_get_mpq(rat), get_gmp(q));
+  } else {
+    rat_t temp;
+    rat_init(temp);
+    rat_set_mpq(temp, get_gmp(q));
+    rat_sub_self(rat, temp);
+    rat_clear(temp);
+  }
+}
+
+const bool LOWER_BOUND = true;
+const bool UPPER_BOUND = false;
+
+static rat_ptr rat_get_bound(const simplex_solver_t *const solver,
+                             const thvar_t v, const bool is_lower_bound,
+                             rat_t bound) {
+  const int32_t bound_idx = is_lower_bound ? solver->vtbl.lower_index[v]
+                                           : solver->vtbl.upper_index[v];
+  xrational_t *const bounds = solver->bstack.bound;
+  assert(bound); // Bound must be non-null
+
+  const bool is_finite = bound_idx > -1;
+  if (!is_finite)
+    return is_lower_bound ? rat_NINFTY : rat_INFTY;
+
+  const bool is_strict =
+      __smt2_globals.delta < 0 &&
+      (is_finite ? !xq_is_rational(&bounds[bound_idx]) : false);
+
+  assert(bound_idx >= 0 && bound_idx < solver->bstack.size);
+  const rational_t *val = &bounds[bound_idx].main;
+  rat_set_q(bound, val);
+
+  if (__smt2_globals.epsilon_mode && is_strict) {
+    // Adjust the bounds with epsilon
+    if (is_lower_bound) {
+      rat_add_si(bound, epsilon_num, epsilon_den);
+    } else {
+      rat_sub_si(bound, epsilon_num, epsilon_den);
+    }
+  }
+  return bound;
+}
 
 /**
  * Checks whether a theory variable is already represented as a column in the
@@ -77,42 +164,6 @@ static bool var_is_valid_column(simplex_solver_t *const solver,
 }
 
 /**
- * Determines whether a theory variable should be encoded as an auxiliary row in
- * the LP model.
- * We only care about polynomials that are not constants.
- * E.g., p := a.x or p := a.x + c, but not p := c, where c is a constant.
- * @param solver The simplex solver containing the variable table and bounds.
- * @param v The theory variable to inspect.
- * @return true if the variable is a polynomial-defined non-constant row; false
- * otherwise.
- */
-static bool var_is_valid_row(simplex_solver_t *const solver, const thvar_t v) {
-  if (!arith_var_def_is_poly(&solver->vtbl, v))
-    return false;
-  const polynomial_t *const p = arith_var_poly_def(&solver->vtbl, v);
-  assert(p);
-  return !(p->nterms == 1 && p->mono[0].var == const_idx) &&
-         has_any_bound(solver, v);
-}
-
-/**
- * Determines whether a theory variable may be encoded as a structural column in
- * the LP model.
- * We only care about free variables, i.e., those that appear
- * in the SMT definition.
- * @param solver The simplex solver containing the variable table and bounds.
- * @param v The theory variable to inspect.
- * @return true if the variable is free; otherwise false.
- */
-static bool var_is_valid_strict_column(simplex_solver_t *const solver,
-                                       const thvar_t v) {
-  if (arith_var_is_free(&solver->vtbl, v) &&
-      (has_strict_lb(solver, v) || has_strict_ub(solver, v)))
-    return true;
-  return false;
-}
-
-/**
  * Initializes the global QSopt_ex runtime if it has not already been started.
  * This function is idempotent and ensures the underlying QSopt_ex exact solver
  * is initialized before building or solving LP problems.
@@ -121,16 +172,16 @@ static void global_qsx_start() {
   if (qsx_started)
     return;
   qsx_started = true;
+  rat_init(rat_negoneLpNum);
+  rat_set_int32(rat_negoneLpNum, -1, 1);
   QSexactStart();
-  mpq_init(mpq_negoneLpNum);
-  mpq_set_si(mpq_negoneLpNum, -1, 1);
 }
 
 void global_qsx_clear() {
   if (!qsx_started)
     return;
-  mpq_clear(mpq_negoneLpNum);
   QSexactClear();
+  rat_clear(rat_negoneLpNum);
   qsx_started = false;
 }
 
@@ -193,9 +244,9 @@ static bool should_update_max_delta(const qsx_t *const qsx) {
 static void qsx_init(qsx_t *qsx) {
   global_qsx_start();
   memset(qsx, 0, sizeof(qsx_t));
-  qsx->prob = mpq_QScreate_prob(NULL, QS_MIN);
-  mpq_QSset_param(qsx->prob, QS_PARAM_SIMPLEX_MAX_ITERATIONS, pivot_threshold);
-  mpq_QSset_param(qsx->prob, QS_PARAM_SIMPLEX_DISPLAY,
+  qsx->prob = rat_QScreate_prob(NULL, QS_MIN);
+  rat_QSset_param(qsx->prob, QS_PARAM_SIMPLEX_MAX_ITERATIONS, pivot_threshold);
+  rat_QSset_param(qsx->prob, QS_PARAM_SIMPLEX_DISPLAY,
                   __smt2_globals.verbosity);
 }
 
@@ -273,26 +324,22 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   // We are adding an additional variable to the LP problem
   // to collect the value of the strict var, if needed.
   // There is no need do add it anywhere else
-  qsx->x = safe_malloc((qsx->n_cols + 1) * sizeof(mpq_t));
+  qsx->x = new_rat_array(qsx->n_cols + 1);
   // We do not allocate the y array.
   // Instead, we link it to the existing array in the LP problem,
   // after we solve an instance
   qsx->y = NULL;
-  qsx->range = safe_malloc(qsx->n_rows * sizeof(mpq_t));
-  qsx->rhs = safe_malloc(qsx->n_rows * sizeof(mpq_t));
+  qsx->range = new_rat_array(qsx->n_rows);
+  qsx->rhs = new_rat_array(qsx->n_rows);
   qsx->sense = safe_malloc(qsx->n_rows * sizeof(char));
 
   for (uint32_t i = 0; i < qsx->n_cols; i++) {
     qsx->col_to_var[i] = -1;
-    mpq_init(qsx->x[i]);
   }
-  mpq_init(qsx->x[qsx->n_cols]); // Initialize the strict var
-  mpq_set(qsx->x[qsx->n_cols], mpq_oneLpNum);
+  rat_set(qsx->x[qsx->n_cols], rat_oneLpNum); // Initialize the strict var
 
   for (uint32_t i = 0; i < qsx->n_rows; i++) {
     qsx->row_to_var[i] = -1;
-    mpq_init(qsx->range[i]);
-    mpq_init(qsx->rhs[i]);
   }
   for (uint32_t i = 0; i < nvars; i++) {
     qsx->var_to_col[i] = -1;
@@ -306,18 +353,15 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
  */
 static void qsx_clear(qsx_t *const qsx) {
   basis_clear(&qsx->basis);
-  mpq_QSfree_prob(qsx->prob);
-  mpq_vector_clear(qsx->x, qsx->n_cols + 1);
-  mpq_vector_clear(qsx->range, qsx->n_rows);
-  mpq_vector_clear(qsx->rhs, qsx->n_rows);
+  rat_QSfree_prob(qsx->prob);
   safe_free(qsx->col_to_var);
   safe_free(qsx->row_to_var);
   safe_free(qsx->var_to_col);
   safe_free(qsx->var_to_row);
-  safe_free(qsx->x);
-  safe_free(qsx->range);
-  safe_free(qsx->rhs);
   safe_free(qsx->sense);
+  free_rat_array(qsx->x, qsx->n_cols + 1);
+  free_rat_array(qsx->range, qsx->n_rows);
+  free_rat_array(qsx->rhs, qsx->n_rows);
 }
 
 /**
@@ -334,7 +378,7 @@ static void qsx_clear(qsx_t *const qsx) {
 static void add_cols_epsilon(simplex_solver_t *const solver,
                              const qsx_t *const qsx) {
   assert(qsx->n_cols > 0);
-  mpq_QSprob prob = qsx->prob;
+  rat_QSprob prob = qsx->prob;
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
@@ -342,17 +386,22 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
   for (thvar_t v = 0; v < num_vars; v++) {
     // Free variables. They come from the SMT input. Encode them as columns.
     if (var_is_valid_column(solver, v)) {
-      bound_type_t lb, ub;
-      get_bound(solver, v, true, &lb);
-      get_bound(solver, v, false, &ub);
+      rat_t lb, ub;
+      rat_init(lb);
+      rat_init(ub);
+      rat_ptr lb_ptr = has_lb(solver, v) ? lb : rat_NINFTY;
+      rat_ptr ub_ptr = has_ub(solver, v) ? ub : rat_INFTY;
 
-      qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
-      qsx->var_to_col[v] = mpq_QSget_colcount(prob);
-      mpq_QSnew_col(prob, mpq_oneLpNum, lb.is_finite ? lb.val : mpq_NINFTY,
-                    ub.is_finite ? ub.val : mpq_INFTY, NULL);
+      // bound_type_rat_t lb, ub;
+      // get_bound(solver, v, true, &lb);
+      // get_bound(solver, v, false, &ub);
 
-      bound_type_clear(&lb);
-      bound_type_clear(&ub);
+      qsx->col_to_var[rat_QSget_colcount(prob)] = v;
+      qsx->var_to_col[v] = rat_QSget_colcount(prob);
+      rat_QSnew_col(prob, rat_oneLpNum, lb_ptr, ub_ptr, NULL);
+
+      rat_clear(lb);
+      rat_clear(ub);
     }
 
     // If the variable is not free, it is an auxiliary variable.
@@ -362,22 +411,22 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
 
 typedef struct row_data_s {
   int *col_idxs;
-  mpq_t *values;
+  rat_t *values;
   int row_idx;
   int col_idxs_idx;
   int values_idx;
 } row_data_t;
 
 typedef struct row_accumulator_s {
-  mpq_t *values;
+  rat_t *values;
   int *values_idxs;
   int n_values;
 } row_accumulator_t;
 
 static void row_accumulator_init(row_accumulator_t *const accumulator,
                                  const int n_cols) {
-  accumulator->values = safe_malloc(n_cols * sizeof(mpq_t));
-  memset(accumulator->values, 0, n_cols * sizeof(mpq_t));
+  accumulator->values = safe_malloc(n_cols * sizeof(rat_t));
+  memset(accumulator->values, 0, n_cols * sizeof(rat_t));
   accumulator->values_idxs = safe_malloc(n_cols * sizeof(int));
   accumulator->n_values = 0;
 }
@@ -386,7 +435,7 @@ static void row_accumulator_clear(row_accumulator_t *const accumulator,
                                   const bool clear_mpqs) {
   if (clear_mpqs) {
     for (int i = 0; i < accumulator->n_values; i++) {
-      mpq_clear(accumulator->values[accumulator->values_idxs[i]]);
+      rat_clear(accumulator->values[accumulator->values_idxs[i]]);
     }
   }
   safe_free(accumulator->values);
@@ -398,12 +447,12 @@ static void row_accumulator_clear(row_accumulator_t *const accumulator,
 
 static void row_accumulator_add_mpq(row_accumulator_t *const accumulator,
                                     const int col_idx, const mpq_t value) {
-  if (accumulator->values[col_idx]->_mp_num._mp_d == NULL) {
-    mpq_init(accumulator->values[col_idx]);
-    mpq_set(accumulator->values[col_idx], value);
+  if (rat_is_uninitialized(accumulator->values[col_idx])) {
+    rat_init(accumulator->values[col_idx]);
+    rat_set_mpq(accumulator->values[col_idx], value);
     accumulator->values_idxs[accumulator->n_values++] = col_idx;
   } else {
-    mpq_add(accumulator->values[col_idx], accumulator->values[col_idx], value);
+    rat_add_mpq(accumulator->values[col_idx], value);
   }
 }
 
@@ -412,12 +461,13 @@ static void row_accumulator_add_q(row_accumulator_t *const accumulator,
   if (is_ratgmp(value)) {
     row_accumulator_add_mpq(accumulator, col_idx, get_gmp(value));
   } else {
-    if (accumulator->values[col_idx]->_mp_num._mp_d == NULL) {
-      mpq_init(accumulator->values[col_idx]);
-      mpq_set_si(accumulator->values[col_idx], get_num(value), get_den(value));
+    if (rat_is_uninitialized(accumulator->values[col_idx])) {
+      rat_init(accumulator->values[col_idx]);
+      rat_set_int32(accumulator->values[col_idx], get_num(value),
+                    get_den(value));
       accumulator->values_idxs[accumulator->n_values++] = col_idx;
     } else {
-      mpq_add_si(accumulator->values[col_idx], get_num(value), get_den(value));
+      rat_add_si(accumulator->values[col_idx], get_num(value), get_den(value));
     }
   }
 }
@@ -464,7 +514,7 @@ static void monomials_to_row(simplex_solver_t *const solver,
       // Use the constant to update the right-hand side of the row
       assert(p->nterms > 1); // Constant with only one term are ignored
       assert(has_any_bound(solver, v));
-      mpq_q_sub(qsx->rhs[row_idx], qsx->rhs[row_idx], coeff);
+      rat_sub_q(qsx->rhs[row_idx], coeff);
     } else if (var_in_columns(qsx, x)) {
       assert(var_is_valid_column(solver, x));
       // Add var coefficient
@@ -491,10 +541,10 @@ static int polynomial_to_row(simplex_solver_t *const solver,
     row_data->col_idxs[row_data->col_idxs_idx++] = col_idx;
     // Transfer ownership to the row_data values array
     memcpy(row_data->values[row_data->values_idx++],
-           accumulator.values[col_idx], sizeof(mpq_t));
+           accumulator.values[col_idx], sizeof(rat_t));
   }
 
-  // We do not need to clear the mpq_t values in the accumulator
+  // We do not need to clear the rat_t values in the accumulator
   // because they have been assigned to the row_data values array,
   // which will be cleared later.
   row_accumulator_clear(&accumulator, false);
@@ -527,7 +577,7 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
   case QS_COL_BSTAT_BASIC:
   case QS_COL_BSTAT_FREE: // Shared with basic
     // Start by setting the current basic result
-    xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
+    xq_set_rat(sol->x + v, qsx->x[c]);
     // Ensure the result is within the bounds of the variable, if any
     if (is_below_or_eq_lb(solver, v, x + v)) {
       sol->bounds[v] = VAR_BOUND_AT_LOWER;
@@ -541,7 +591,7 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
     if (!has_any_bound(solver, v)) {
       // Free rows are set to lower bound, so we leave the value as is
       // (there is no lower bound to set them to)
-      xq_set_mpq_prenormalize(sol->x + v, qsx->x[c]);
+      xq_set_rat(sol->x + v, qsx->x[c]);
       assert(xq_is_zero(sol->x + v));
     } else {
       assert(has_lb(solver, v));
@@ -570,16 +620,16 @@ static void row_value_to_solution(const qsx_t *const qsx,
                                   const external_solution_t *const sol,
                                   const int r) {
   const thvar_t v = qsx->row_to_var[r];
-  mpq_t rhs;
-  mpq_init(rhs);
-  mpq_set(rhs, qsx->rhs[r]);
+  rat_t rhs;
+  rat_init(rhs);
+  rat_set(rhs, qsx->rhs[r]);
   if (qsx->sense[r] == 'L') {
-    mpq_sub(rhs, rhs, qsx->y[r]);
+    rat_sub_self(rhs, qsx->y[r]);
   } else {
-    mpq_add(rhs, rhs, qsx->y[r]);
+    rat_add_self(rhs, qsx->y[r]);
   }
-  xq_set_mpq_prenormalize(sol->x + v, rhs);
-  mpq_clear(rhs);
+  xq_set_rat(sol->x + v, rhs);
+  rat_clear(rhs);
 }
 
 /**
@@ -663,14 +713,14 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
 static void add_rows_epsilon(simplex_solver_t *const solver,
                              const qsx_t *const qsx) {
   assert(qsx->n_rows > 0);
-  mpq_QSprob prob = qsx->prob;
+  rat_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_rows];
   int begin_row_idx[qsx->n_rows];
 
   row_data_t rd = {.col_idxs = safe_malloc(
-                       sizeof(int) * mpq_QSget_colcount(prob) * qsx->n_rows),
+                       sizeof(int) * rat_QSget_colcount(prob) * qsx->n_rows),
                    .values = safe_malloc(
-                       sizeof(mpq_t) * mpq_QSget_colcount(prob) * qsx->n_rows),
+                       sizeof(rat_t) * rat_QSget_colcount(prob) * qsx->n_rows),
                    .row_idx = 0,
                    .col_idxs_idx = 0,
                    .values_idx = 0};
@@ -687,50 +737,36 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
     // where the non-zero columns of the row are stored
     begin_row_idx[r] = rd.col_idxs_idx;
 
-    // TODO: may be unnecessary if 'R' sense is not used
-    mpq_set(qsx->range[r], mpq_zeroLpNum);
+    // Sense is always initialized to 0
+    // rat_set(qsx->range[r], rat_zeroLpNum);
 
-    // Add row range
-    bound_type_t lb, ub;
-    get_bound(solver, v, true, &lb);
-    get_bound(solver, v, false, &ub);
-
-    if (lb.is_finite && ub.is_finite) // Bounded
+    if (has_both_bounds(solver, v)) // Bounded
     {
-      if (mpq_equal(lb.val, ub.val)) {
-        mpq_set(qsx->rhs[r], lb.val);
+      if (has_eq_bounds(solver, v)) {
+        rat_get_bound(solver, v, LOWER_BOUND, qsx->rhs[r]);
         qsx->sense[r] = 'E';
       } else {
-        mpq_set(qsx->rhs[r], lb.val);
-        mpq_set(qsx->range[r], ub.val);
-        mpq_sub(qsx->range[r], qsx->range[r], qsx->rhs[r]);
-        if (lb.is_strict) { // Need to offset the lower bound by epsilon
-          mpq_sub_si(qsx->range[r], epsilon_num, epsilon_den);
+        rat_get_bound(solver, v, LOWER_BOUND, qsx->rhs[r]);
+        rat_get_bound(solver, v, UPPER_BOUND, qsx->range[r]);
+        rat_sub(qsx->range[r], qsx->range[r], qsx->rhs[r]);
+        if (has_strict_lb(solver, v)) {
+          // Need to offset the lower bound by epsilon
+          rat_sub_si(qsx->range[r], epsilon_num, epsilon_den);
         }
         qsx->sense[r] = 'R';
       }
-      // printf("Adding bounded row %d with lower bound %s and upper bound
-      // %s\n", row_idx, mpq_get_str(NULL, 10, d_rhs[row_idx]),
-      // mpq_get_str(NULL, 10, d_range[row_idx]));
-    } else if (lb.is_finite) // Only lower bound
+    } else if (has_lb(solver, v)) // Only lower bound
     {
-      // printf("Adding lower bounded row %d with lower bound %s\n", row_idx,
-      // mpq_get_str(NULL, 10, lb.val));
-      mpq_set(qsx->rhs[r], lb.val);
+      rat_get_bound(solver, v, LOWER_BOUND, qsx->rhs[r]);
       qsx->sense[r] = 'G';
-    } else if (ub.is_finite) // Only upper bound
+    } else if (has_ub(solver, v)) // Only upper bound
     {
-      // printf("Adding upper bounded row %d with upper bound %s\n", r,
-      //        mpq_get_str(NULL, 10, ub.val));
-      mpq_set(qsx->rhs[r], ub.val);
+      rat_get_bound(solver, v, UPPER_BOUND, qsx->rhs[r]);
       qsx->sense[r] = 'L';
     } else // Unbounded row, which should be filtered out
     {
       assert(false);
     }
-
-    bound_type_clear(&lb);
-    bound_type_clear(&ub);
 
     const int num_non_zeros = polynomial_to_row(solver, qsx, v, &rd);
 
@@ -744,11 +780,11 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
     rd.row_idx++;
   }
 
-  mpq_QSadd_ranged_rows(prob, rd.row_idx, non_zero_per_row, begin_row_idx,
+  rat_QSadd_ranged_rows(prob, rd.row_idx, non_zero_per_row, begin_row_idx,
                         rd.col_idxs, rd.values, qsx->rhs, qsx->sense,
                         qsx->range, NULL);
 
-  mpq_vector_clear(rd.values, rd.values_idx);
+  rat_array_clear(rd.values, rd.values_idx);
   safe_free(rd.col_idxs);
   safe_free(rd.values);
 }
@@ -763,12 +799,12 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
  */
 static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
                                      external_solution_t *sol) {
-  const mpq_QSprob *prob = &qsx->prob;
+  const rat_QSprob *prob = &qsx->prob;
 
-  for (int col_idx = 0; col_idx < mpq_QSget_colcount(*prob); col_idx++) {
+  for (int col_idx = 0; col_idx < rat_QSget_colcount(*prob); col_idx++) {
     extract_col_value(solver, qsx, sol, col_idx);
   }
-  for (int row_idx = 0; row_idx < mpq_QSget_rowcount(*prob); row_idx++) {
+  for (int row_idx = 0; row_idx < rat_QSget_rowcount(*prob); row_idx++) {
     extract_row_value(solver, qsx, sol, row_idx);
   }
 }
@@ -785,8 +821,8 @@ static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
                                       qsx_t *const qsx) {
   add_cols_epsilon(solver, qsx);
   add_rows_epsilon(solver, qsx);
-  assert(qsx->n_cols == mpq_QSget_colcount(qsx->prob));
-  assert(qsx->n_rows == mpq_QSget_rowcount(qsx->prob));
+  assert(qsx->n_cols == rat_QSget_colcount(qsx->prob));
+  assert(qsx->n_rows == rat_QSget_rowcount(qsx->prob));
 }
 
 #pragma endregion
@@ -802,7 +838,7 @@ static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
  */
 static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   assert(qsx->n_cols > 0);
-  mpq_QSprob prob = qsx->prob;
+  rat_QSprob prob = qsx->prob;
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
@@ -810,18 +846,18 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   for (thvar_t v = 0; v < num_vars; v++) {
     // Free variables. They come from the SMT input. Encode them as columns.
     if (var_is_valid_column(solver, v)) {
-      bound_type_t lb, ub;
-      get_bound(solver, v, true, &lb);
-      get_bound(solver, v, false, &ub);
+      rat_t temp_lb, temp_ub;
+      rat_init_pair(temp_lb, temp_ub);
+      rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
+      rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
-      qsx->col_to_var[mpq_QSget_colcount(prob)] = v;
-      qsx->var_to_col[v] = mpq_QSget_colcount(prob);
-      mpq_QSnew_col(prob, mpq_zeroLpNum,
-                    lb.is_finite && !lb.is_strict ? lb.val : mpq_NINFTY,
-                    ub.is_finite && !ub.is_strict ? ub.val : mpq_INFTY, NULL);
+      qsx->col_to_var[rat_QSget_colcount(prob)] = v;
+      qsx->var_to_col[v] = rat_QSget_colcount(prob);
+      rat_QSnew_col(prob, rat_zeroLpNum,
+                    !has_strict_lb(solver, v) ? lb : rat_NINFTY,
+                    !has_strict_ub(solver, v) ? ub : rat_INFTY, NULL);
 
-      bound_type_clear(&lb);
-      bound_type_clear(&ub);
+      rat_clear_pair(temp_lb, temp_ub);
     }
 
     // If the variable is not free, it is an auxiliary variable.
@@ -830,7 +866,7 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
 
   // At the end, add the strict variable column,
   // which is used to encode the strict bounds
-  mpq_QSnew_col(prob, mpq_negoneLpNum, mpq_zeroLpNum, mpq_oneLpNum, NULL);
+  rat_QSnew_col(prob, rat_negoneLpNum, rat_zeroLpNum, rat_oneLpNum, NULL);
 }
 
 /**
@@ -842,15 +878,15 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
  */
 static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   assert(qsx->n_rows > 0);
-  mpq_QSprob prob = qsx->prob;
+  rat_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_rows];
   int begin_row_idx[qsx->n_rows];
   const int strict_var_idx = qsx->n_cols; // TODO: n_cols or QSget_n_cols ?
 
   row_data_t rd = {.col_idxs = safe_malloc(
-                       sizeof(int) * mpq_QSget_colcount(prob) * qsx->n_rows),
+                       sizeof(int) * rat_QSget_colcount(prob) * qsx->n_rows),
                    .values = safe_malloc(
-                       sizeof(mpq_t) * mpq_QSget_colcount(prob) * qsx->n_rows),
+                       sizeof(rat_t) * rat_QSget_colcount(prob) * qsx->n_rows),
                    .row_idx = 0,
                    .col_idxs_idx = 0,
                    .values_idx = 0};
@@ -876,16 +912,16 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
         rd.col_idxs[rd.col_idxs_idx++] =
             qsx->n_cols; // TODO: n_cols or QSget_n_cols ?
         // Add 1 coeff to the variable and -1 to the strict variable
-        mpq_init(rd.values[rd.values_idx]);
-        mpq_set(rd.values[rd.values_idx++], mpq_oneLpNum);
-        mpq_init(rd.values[rd.values_idx]);
-        mpq_set(rd.values[rd.values_idx++], mpq_negoneLpNum);
+        rat_init(rd.values[rd.values_idx]);
+        rat_set(rd.values[rd.values_idx++], rat_oneLpNum);
+        rat_init(rd.values[rd.values_idx]);
+        rat_set(rd.values[rd.values_idx++], rat_negoneLpNum);
         // Set the sense 'Greater Than'
         qsx->sense[rd.row_idx] = 'G';
         // Set the right-hand side to the lower bound of the variable
-        copy_to_gmp(qsx->rhs[rd.row_idx], &get_lb(solver, v)->main);
+        rat_set_q(qsx->rhs[rd.row_idx], &get_lb(solver, v)->main);
         // No need for range
-        mpq_set(qsx->range[rd.row_idx], mpq_zeroLpNum);
+        rat_set(qsx->range[rd.row_idx], rat_zeroLpNum);
         // Update the mapping and increment the row index
         qsx->row_to_var[rd.row_idx] = v;
         qsx->var_to_row[v] = rd.row_idx;
@@ -898,16 +934,16 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
         rd.col_idxs[rd.col_idxs_idx++] = qsx->var_to_col[v];
         rd.col_idxs[rd.col_idxs_idx++] = strict_var_idx;
         // Add 1 coeff to the variable and 1 to the strict variable
-        mpq_init(rd.values[rd.values_idx]);
-        mpq_set(rd.values[rd.values_idx++], mpq_oneLpNum);
-        mpq_init(rd.values[rd.values_idx]);
-        mpq_set(rd.values[rd.values_idx++], mpq_oneLpNum);
+        rat_init(rd.values[rd.values_idx]);
+        rat_set(rd.values[rd.values_idx++], rat_oneLpNum);
+        rat_init(rd.values[rd.values_idx]);
+        rat_set(rd.values[rd.values_idx++], rat_oneLpNum);
         // Set the sense 'Greater Than'
         qsx->sense[rd.row_idx] = 'L';
         // Set the right-hand side to the lower bound of the variable
-        copy_to_gmp(qsx->rhs[rd.row_idx], &get_ub(solver, v)->main);
+        rat_set_q(qsx->rhs[rd.row_idx], &get_ub(solver, v)->main);
         // No need for range
-        mpq_set(qsx->range[rd.row_idx], mpq_zeroLpNum);
+        rat_set(qsx->range[rd.row_idx], rat_zeroLpNum);
         // Update the mapping and increment the row index
         qsx->row_to_var[rd.row_idx] = v;
         qsx->var_to_row[v] = rd.row_idx;
@@ -919,15 +955,11 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
     // where the non-zero columns of the row are stored
     begin_row_idx[rd.row_idx] = rd.col_idxs_idx;
 
-    mpq_set(qsx->rhs[rd.row_idx], mpq_zeroLpNum);
-    // TODO: may be unnecessary if 'R' sense is not used
-    mpq_set(qsx->range[rd.row_idx], mpq_zeroLpNum);
+    // All rat_t numbers are initialized to 0
+    // rat_set(qsx->rhs[rd.row_idx], rat_zeroLpNum);
+    // rat_set(qsx->range[rd.row_idx], rat_zeroLpNum);
 
     // Add row range
-    bound_type_t lb, ub;
-    get_bound(solver, v, true, &lb);
-    get_bound(solver, v, false, &ub);
-
     const int num_non_zeros = polynomial_to_row(solver, qsx, v, &rd);
 
     // For each row, we set the number of non-zero coefficients
@@ -939,14 +971,14 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
     if (has_strict_lb(solver, v) || has_strict_ub(solver, v)) {
       const bool is_lb_strict = has_strict_lb(solver, v);
 
-      if (lb.is_finite) {
+      if (has_lb(solver, v)) {
         if (is_lb_strict) {
           non_zero_per_row[rd.row_idx]++;
           rd.col_idxs[rd.col_idxs_idx++] = strict_var_idx;
-          mpq_init(rd.values[rd.values_idx]);
-          mpq_set(rd.values[rd.values_idx++], mpq_negoneLpNum);
+          rat_init(rd.values[rd.values_idx]);
+          rat_set(rd.values[rd.values_idx++], rat_negoneLpNum);
         }
-        mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], lb.val);
+        rat_add_q(qsx->rhs[rd.row_idx], get_lb_main(solver, v));
         qsx->sense[rd.row_idx] = 'G';
         // Add the new row to the map
         qsx->row_to_var[rd.row_idx] = v;
@@ -966,21 +998,21 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
         for (int i = rd.col_idxs_idx - prev_row_non_zeros; i < max_idx_offset;
              i++) {
           rd.col_idxs[rd.col_idxs_idx++] = rd.col_idxs[i];
-          mpq_init(rd.values[rd.values_idx]);
-          mpq_set(rd.values[rd.values_idx++], rd.values[i]);
+          rat_init(rd.values[rd.values_idx]);
+          rat_set(rd.values[rd.values_idx++], rd.values[i]);
         }
         non_zero_per_row[rd.row_idx] =
             prev_row_non_zeros - (is_lb_strict ? 1 : 0);
       }
 
-      if (ub.is_finite) {
-        if (ub.is_strict) {
+      if (has_ub(solver, v)) {
+        if (has_strict_ub(solver, v)) {
           non_zero_per_row[rd.row_idx]++;
           rd.col_idxs[rd.col_idxs_idx++] = strict_var_idx;
-          mpq_init(rd.values[rd.values_idx]);
-          mpq_set(rd.values[rd.values_idx++], mpq_oneLpNum);
+          rat_init(rd.values[rd.values_idx]);
+          rat_set(rd.values[rd.values_idx++], rat_oneLpNum);
         }
-        mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], ub.val);
+        rat_add_q(qsx->rhs[rd.row_idx], get_ub_main(solver, v));
         qsx->sense[rd.row_idx] = 'L';
         // Add the new row to the map
         qsx->row_to_var[rd.row_idx] = v;
@@ -988,47 +1020,41 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
         rd.row_idx++;
       }
 
-      bound_type_clear(&lb);
-      bound_type_clear(&ub);
       continue;
     }
 
     assert(!has_strict_lb(solver, v) && !has_strict_ub(solver, v));
-    if (lb.is_finite && ub.is_finite) // Bounded
+    if (has_both_bounds(solver, v)) // Bounded
     {
-      if (mpq_equal(lb.val, ub.val)) {
-        mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], lb.val);
+      if (has_eq_bounds(solver, v)) {
+        rat_add_q(qsx->rhs[rd.row_idx], get_lb_main(solver, v));
         qsx->sense[rd.row_idx] = 'E';
       } else {
-        mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], lb.val);
-        mpq_set(qsx->range[rd.row_idx], ub.val);
-        mpq_sub(qsx->range[rd.row_idx], qsx->range[rd.row_idx],
-                qsx->rhs[rd.row_idx]);
+        rat_add_q(qsx->rhs[rd.row_idx], get_lb_main(solver, v));
+        rat_set_q(qsx->range[rd.row_idx], get_ub_main(solver, v));
+        rat_sub_self(qsx->range[rd.row_idx], qsx->rhs[rd.row_idx]);
         qsx->sense[rd.row_idx] = 'R';
       }
       // printf("Adding bounded row %d with lower bound %s and upper bound
-      // %s\n", row_idx, mpq_get_str(NULL, 10, d_rhs[row_idx]),
-      // mpq_get_str(NULL, 10, d_range[row_idx]));
-    } else if (lb.is_finite) // Only lower bound
+      // %s\n", row_idx, rat_get_str(NULL, 10, d_rhs[row_idx]),
+      // rat_get_str(NULL, 10, d_range[row_idx]));
+    } else if (has_lb(solver, v)) // Only lower bound
     {
       // printf("Adding lower bounded row %d with lower bound %s\n", row_idx,
-      // mpq_get_str(NULL, 10, lb.val));
-      mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], lb.val);
+      // rat_get_str(NULL, 10, lb.val));
+      rat_add_q(qsx->rhs[rd.row_idx], get_lb_main(solver, v));
       qsx->sense[rd.row_idx] = 'G';
-    } else if (ub.is_finite) // Only upper bound
+    } else if (has_ub(solver, v)) // Only upper bound
     {
       // printf("Adding upper bounded row %d with upper bound %s\n",
       // row_data.row_idx,
-      //        mpq_get_str(NULL, 10, ub.val));
-      mpq_add(qsx->rhs[rd.row_idx], qsx->rhs[rd.row_idx], ub.val);
+      //        rat_get_str(NULL, 10, ub.val));
+      rat_add_q(qsx->rhs[rd.row_idx], get_ub_main(solver, v));
       qsx->sense[rd.row_idx] = 'L';
     } else // Unbounded row, handled above
     {
       assert(false);
     }
-
-    bound_type_clear(&lb);
-    bound_type_clear(&ub);
 
     // Add the new row to the map
     qsx->row_to_var[rd.row_idx] = v;
@@ -1043,18 +1069,18 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   print_int_vector(non_zero_per_row, rd.row_idx, "Non-zero per row");
   print_int_vector(begin_row_idx, rd.row_idx, "Begin row index");
   print_int_vector(rd.col_idxs, rd.col_idxs_idx, "Col indices");
-  print_mpq_vector(rd.values, rd.values_idx, "Values");
-  print_mpq_vector(qsx->rhs, rd.row_idx, "RHS");
+  print_rat_vector(rd.values, rd.values_idx, "Values");
+  print_rat_vector(qsx->rhs, rd.row_idx, "RHS");
   print_char_vector(qsx->sense, rd.row_idx, "Sense");
-  print_mpq_vector(qsx->range, rd.row_idx, "Range");
+  print_rat_vector(qsx->range, rd.row_idx, "Range");
 #endif
 
-  mpq_QSadd_ranged_rows(prob, rd.row_idx, non_zero_per_row, begin_row_idx,
+  rat_QSadd_ranged_rows(prob, rd.row_idx, non_zero_per_row, begin_row_idx,
                         rd.col_idxs, rd.values, qsx->rhs, qsx->sense,
                         qsx->range, NULL);
 
-  assert(rd.row_idx == qsx->n_rows && rd.row_idx == mpq_QSget_rowcount(prob));
-  mpq_vector_clear(rd.values, rd.values_idx);
+  assert(rd.row_idx == qsx->n_rows && rd.row_idx == rat_QSget_rowcount(prob));
+  rat_array_clear(rd.values, rd.values_idx);
   safe_free(rd.col_idxs);
   safe_free(rd.values);
 }
@@ -1068,8 +1094,8 @@ static void qsx_build_problem_strict(simplex_solver_t *const solver,
                                      qsx_t *const qsx) {
   add_cols_strict(solver, qsx);
   add_rows_strict(solver, qsx);
-  assert(qsx->n_cols == mpq_QSget_colcount(qsx->prob) - 1);
-  assert(qsx->n_rows == mpq_QSget_rowcount(qsx->prob));
+  assert(qsx->n_cols == rat_QSget_colcount(qsx->prob) - 1);
+  assert(qsx->n_rows == rat_QSget_rowcount(qsx->prob));
 }
 
 /**
@@ -1085,20 +1111,20 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
 
   // TODO: we may skip ensuring that the strict variable is 0 entirely
 #if 1
-  if (is_strict_basic && mpq_is_pos(qsx->x[strict_var_idx])) {
+  if (is_strict_basic && rat_is_pos(qsx->x[strict_var_idx])) {
     [[maybe_unused]] int res =
-        mpq_QSchange_bound(qsx->prob, strict_var_idx, 'U', mpq_zeroLpNum);
+        rat_QSchange_bound(qsx->prob, strict_var_idx, 'U', rat_zeroLpNum);
     assert(res == 0);
 
-    mpq_t delta;
-    mpq_init(delta);
-    mpq_set_d(delta, __smt2_globals.delta);
+    rat_t delta;
+    rat_init(delta);
+    rat_set_double(delta, __smt2_globals.delta);
 
-    res = QSdelta_solver(qsx->prob, delta, qsx->x, NULL, &qsx->basis, NULL,
-                         PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
+    res = QSdelta_solver_rat(qsx->prob, delta, qsx->x, NULL, &qsx->basis, NULL,
+                             PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
     assert(res == 0);
     qsx->y = qsx->prob->lp->pIpiz;
-    mpq_clear(delta);
+    rat_clear(delta);
 
     const external_simplex_status_t status = qsx_status_to_sol_status(qsx);
     if (status != EXTERNAL_SIMPLEX_FEASIBLE &&
@@ -1120,7 +1146,7 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
   // or it is non-basic and we don't care about its value.
   // If there is no feasible solution, all bets are off.
   assert(sol->status != EXTERNAL_SIMPLEX_FEASIBLE || !is_strict_basic ||
-         mpq_is_zero(qsx->x[strict_var_idx]));
+         rat_is_zero(qsx->x[strict_var_idx]));
 #endif
 
   for (int col_idx = 0; col_idx < qsx->n_cols; col_idx++) {
@@ -1156,16 +1182,16 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
  */
 static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
                          external_solution_t *const solution) {
-  const mpq_QSprob *const prob = &qsx->prob;
+  const rat_QSprob *const prob = &qsx->prob;
 
   unsigned int precision = 0;
-  mpq_t delta;
-  mpq_init(delta);
-  mpq_set_d(delta, __smt2_globals.delta);
+  rat_t delta;
+  rat_init(delta);
+  rat_set_double(delta, __smt2_globals.delta);
 
   [[maybe_unused]] const int res =
-      QSdelta_solver(*prob, delta, qsx->x, NULL, &qsx->basis, &precision,
-                     PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
+      QSdelta_solver_rat(*prob, delta, qsx->x, NULL, &qsx->basis, &precision,
+                         PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
   assert(res == 0);
   qsx->y = qsx->prob->lp->pIpiz;
 
@@ -1173,14 +1199,14 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   if (precision > solver->stats.max_precision)
     solver->stats.max_precision = precision;
   if (should_update_max_delta(qsx)) {
-    const double new_delta = mpq_get_d(delta);
+    const double new_delta = rat_to_d(delta);
     if (new_delta > solver->stats.max_delta)
       solver->stats.max_delta = new_delta;
   }
 
   solution->nvars = solver->vtbl.nvars;
   solution->status = qsx_status_to_sol_status(qsx);
-  mpq_clear(delta);
+  rat_clear(delta);
 }
 
 /**
@@ -1212,7 +1238,7 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
     qsx_build_problem_strict(solver, &qsx);
 #if 0 && !defined(NDEBUG)
   static int i = 0;
-  mpq_QSdump_prob(qsx.prob);
+  rat_QSdump_prob(qsx.prob);
   fprintf(stderr, "Problem %d %s: n_cols = %d, n_rows = %d\n", i,
           __smt2_globals.epsilon_mode ? "epsilon" : "strict", qsx.n_cols,
           qsx.n_rows);
@@ -1221,7 +1247,7 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
            "/home/campus.ncl.ac.uk/c3054737/Programming/phd/yices2/"
            "qsproblem_%d_%s.lp",
            i, __smt2_globals.epsilon_mode ? "epsilon" : "strict");
-  mpq_QSwrite_prob(qsx.prob, filename, "LP");
+  rat_QSwrite_prob(qsx.prob, filename, "LP");
   i++;
 #endif
   const double start_solve = get_cpu_time();
