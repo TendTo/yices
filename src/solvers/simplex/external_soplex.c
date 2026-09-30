@@ -484,6 +484,11 @@ static bool var_in_columns(const spx_t *const spx, const thvar_t v) {
   return spx->var_to_col[v] != -1;
 }
 
+static bool is_strict_var_zero(mpq_t x) {
+  return __smt2_globals.delta < 0 && !__smt2_globals.epsilon_mode &&
+         mpq_is_zero(x);
+}
+
 /**
  * Determines whether a theory variable may be encoded as a structural column in
  * the LP model.
@@ -500,49 +505,12 @@ static bool var_is_valid_column(simplex_solver_t *const solver,
   return false;
 }
 
-/**
- * Determines whether a theory variable should be encoded as an auxiliary row in
- * the LP model.
- * We only care about polynomials that are not constants.
- * E.g., p := a.x or p := a.x + c, but not p := c, where c is a constant.
- * @param solver The simplex solver containing the variable table and bounds.
- * @param v The theory variable to inspect.
- * @return true if the variable is a polynomial-defined non-constant row; false
- * otherwise.
- */
-static bool var_is_valid_row(simplex_solver_t *const solver, const thvar_t v) {
-  if (!arith_var_def_is_poly(&solver->vtbl, v))
-    return false;
-  const polynomial_t *const p = arith_var_poly_def(&solver->vtbl, v);
-  assert(p);
-  return !(p->nterms == 1 && p->mono[0].var == const_idx) &&
-         has_any_bound(solver, v);
-}
-
-/**
- * Determines whether a theory variable may be encoded as a structural column in
- * the LP model.
- * We only care about free variables, i.e., those that appear
- * in the SMT definition.
- * @param solver The simplex solver containing the variable table and bounds.
- * @param v The theory variable to inspect.
- * @return true if the variable is free; otherwise false.
- */
-static bool var_is_valid_strict_column(simplex_solver_t *const solver,
-                                       const thvar_t v) {
-  if (arith_var_is_free(&solver->vtbl, v) &&
-      (has_strict_lb(solver, v) || has_strict_ub(solver, v)))
-    return true;
-  return false;
-}
-
 static external_simplex_status_t
 spx_status_to_sol_status(const spx_t *const spx) {
   switch (spx->status) {
   case OPTIMAL:
   case UNBOUNDED:
-    return !__smt2_globals.epsilon_mode && spx->x &&
-                   is_strict_var_zero(spx->x[spx->n_cols])
+    return !spx->x || is_strict_var_zero(spx->x[spx->n_cols])
                ? EXTERNAL_SIMPLEX_INFEASIBLE
                : EXTERNAL_SIMPLEX_FEASIBLE;
     break;

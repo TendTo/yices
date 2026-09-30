@@ -20,10 +20,24 @@ external_solution_t new_external_solution(uint32_t nvars);
 void external_solution_init(external_solution_t *sol, uint32_t nvars);
 void external_solution_clear(external_solution_t *sol);
 
-bool has_lb(const simplex_solver_t *solver, thvar_t v);
-bool has_ub(const simplex_solver_t *solver, thvar_t v);
 
-bool has_any_bound(const simplex_solver_t *solver, thvar_t v);
+static inline bool has_lb(const simplex_solver_t *const solver, const thvar_t v) {
+  return solver->vtbl.lower_index[v] > -1;
+}
+
+static inline bool has_ub(const simplex_solver_t *const solver, const thvar_t v) {
+  return solver->vtbl.upper_index[v] > -1;
+}
+
+static inline bool has_any_bound(const simplex_solver_t *const solver, const thvar_t v) {
+  return has_lb(solver, v) || has_ub(solver, v);
+}
+
+static inline bool has_both_bounds(const simplex_solver_t *const solver, const thvar_t v) {
+  return has_lb(solver, v) && has_ub(solver, v);
+}
+
+bool has_eq_bounds(const simplex_solver_t *solver, thvar_t v);
 bool has_strict_lb(const simplex_solver_t *solver, thvar_t v);
 bool has_strict_ub(const simplex_solver_t *solver, thvar_t v);
 
@@ -32,6 +46,8 @@ bool is_above_or_eq_ub(simplex_solver_t *solver, thvar_t x, xrational_t *value);
 
 xrational_t *get_lb(simplex_solver_t *solver, thvar_t x);
 xrational_t *get_ub(simplex_solver_t *solver, thvar_t x);
+rational_t *get_lb_main(simplex_solver_t *solver, thvar_t x);
+rational_t *get_ub_main(simplex_solver_t *solver, thvar_t x);
 
 void init_and_copy_to_gmp(mpq_t dest, const rational_t *src);
 void copy_to_gmp(mpq_t dest, const rational_t *src);
@@ -40,10 +56,45 @@ void mpq_q_mul(mpq_t dest, mpq_t a, const rational_t *b);
 
 void mpq_vector_clear(mpq_t v[], int n);
 
+/**
+ * Determines whether a theory variable should be encoded as an auxiliary row in
+ * the LP model.
+ * We only care about polynomials that are not constants.
+ * E.g., p := a.x or p := a.x + c, but not p := c, where c is a constant.
+ * @param solver The simplex solver containing the variable table and bounds.
+ * @param v The theory variable to inspect.
+ * @return true if the variable is a polynomial-defined non-constant row; false
+ * otherwise.
+ */
+static inline bool var_is_valid_row(simplex_solver_t *const solver,
+                                    const thvar_t v) {
+  if (!arith_var_def_is_poly(&solver->vtbl, v))
+    return false;
+  const polynomial_t *const p = arith_var_poly_def(&solver->vtbl, v);
+  assert(p);
+  return !(p->nterms == 1 && p->mono[0].var == const_idx) &&
+         has_any_bound(solver, v);
+}
+
+/**
+ * Determines whether a theory variable may be encoded as a structural column in
+ * the LP model.
+ * We only care about free variables, i.e., those that appear
+ * in the SMT definition.
+ * @param solver The simplex solver containing the variable table and bounds.
+ * @param v The theory variable to inspect.
+ * @return true if the variable is free; otherwise false.
+ */
+static inline bool var_is_valid_strict_column(simplex_solver_t *const solver,
+                                              const thvar_t v) {
+  if (arith_var_is_free(&solver->vtbl, v) &&
+      (has_strict_lb(solver, v) || has_strict_ub(solver, v)))
+    return true;
+  return false;
+}
+
 external_simplex_status_t
 simplex_check_feasibility_external(simplex_solver_t *solver);
-
-bool is_strict_var_zero(mpq_t x);
 
 /**
  * Obtain a pointer to a bound in terms of mpq_t.

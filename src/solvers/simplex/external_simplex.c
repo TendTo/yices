@@ -408,18 +408,6 @@ import_external_solution(simplex_solver_t *const solver,
   return EXTERNAL_IMPORT_INFEASIBLE;
 }
 
-bool has_lb(const simplex_solver_t *const solver, const thvar_t v) {
-  return solver->vtbl.lower_index[v] > -1;
-}
-
-bool has_ub(const simplex_solver_t *const solver, const thvar_t v) {
-  return solver->vtbl.upper_index[v] > -1;
-}
-
-bool has_any_bound(const simplex_solver_t *const solver, const thvar_t v) {
-  return has_lb(solver, v) || has_ub(solver, v);
-}
-
 bool has_strict_lb(const simplex_solver_t *const solver, const thvar_t v) {
   const int32_t lb_idx = solver->vtbl.lower_index[v];
   return lb_idx > -1 && !xq_is_rational(&solver->bstack.bound[lb_idx]);
@@ -428,6 +416,15 @@ bool has_strict_lb(const simplex_solver_t *const solver, const thvar_t v) {
 bool has_strict_ub(const simplex_solver_t *const solver, const thvar_t v) {
   const int32_t ub_idx = solver->vtbl.upper_index[v];
   return ub_idx > -1 && !xq_is_rational(&solver->bstack.bound[ub_idx]);
+}
+
+bool has_eq_bounds(const simplex_solver_t *const solver, const thvar_t v) {
+  const int32_t lb_idx = solver->vtbl.lower_index[v];
+  const int32_t ub_idx = solver->vtbl.upper_index[v];
+  if (lb_idx > -1 && ub_idx > -1) {
+    return xq_eq(&solver->bstack.bound[lb_idx], &solver->bstack.bound[ub_idx]);
+  }
+  return false;
 }
 
 bool is_below_or_eq_lb(simplex_solver_t *const solver, const thvar_t x,
@@ -452,15 +449,21 @@ xrational_t *get_ub(simplex_solver_t *const solver, const thvar_t x) {
   return k >= 0 ? solver->bstack.bound + k : NULL;
 }
 
+rational_t *get_lb_main(simplex_solver_t *const solver, const thvar_t x) {
+  return has_lb(solver, x)
+             ? &solver->bstack.bound[solver->vtbl.lower_index[x]].main
+             : NULL;
+}
+rational_t *get_ub_main(simplex_solver_t *const solver, const thvar_t x) {
+  return has_ub(solver, x)
+             ? &solver->bstack.bound[solver->vtbl.upper_index[x]].main
+             : NULL;
+}
+
 void mpq_vector_clear(mpq_t v[], const int n) {
   for (int i = 0; i < n; i++) {
     mpq_clear(v[i]);
   }
-}
-
-bool is_strict_var_zero(mpq_t x) {
-  return __smt2_globals.delta < 0 && !__smt2_globals.epsilon_mode &&
-         mpq_is_zero(x);
 }
 
 #if 0 && !defined(NDEBUG)

@@ -14,9 +14,10 @@
 #include "utils/int_bv_sets.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 
-static const long epsilon_num = 1;
-static const unsigned long epsilon_den = 1000000000;
+static const int32_t epsilon_num = 1;
+static const uint32_t epsilon_den = 1000000000;
 
 typedef struct {
   bool free;      ///< If true, the mpq_t val needs to be cleared
