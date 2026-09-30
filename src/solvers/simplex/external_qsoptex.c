@@ -12,6 +12,8 @@
     "QSopt_ex library is not available. Please install it to use this feature."
 #endif
 
+#define USE_MATRIX 1
+
 #include "frontend/smt2/smt2_commands.h"
 #include "io/term_printer.h"
 #include "qsopt_ex/QSopt_ex.h"
@@ -364,51 +366,6 @@ static void qsx_clear(qsx_t *const qsx) {
   free_rat_array(qsx->rhs, qsx->n_rows);
 }
 
-/**
- * Adds all free arithmetic variables as structural columns in the QSopt_ex LP.
- * Each variable that is valid as a column is assigned the corresponding finite
- * or infinite lower/upper bounds from the simplex solver, and the mapping
- * arrays in @p qsx are updated so later row-building logic can refer back to
- * the original theory variable identifiers. In epsilon mode, any strict bound
- * is made stricter by using an hardcoded value @f \epsilon @f.
- * @param solver The simplex solver containing the variable bounds and
- * definitions.
- * @param qsx The QSopt_ex problem wrapper receiving the new columns.
- */
-static void add_cols_epsilon(simplex_solver_t *const solver,
-                             const qsx_t *const qsx) {
-  assert(qsx->n_cols > 0);
-  rat_QSprob prob = qsx->prob;
-
-  // Construct the columns of the LP by assigning upper/lower bounds to each
-  // variable
-  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
-  for (thvar_t v = 0; v < num_vars; v++) {
-    // Free variables. They come from the SMT input. Encode them as columns.
-    if (var_is_valid_column(solver, v)) {
-      rat_t lb, ub;
-      rat_init(lb);
-      rat_init(ub);
-      rat_ptr lb_ptr = has_lb(solver, v) ? lb : rat_NINFTY;
-      rat_ptr ub_ptr = has_ub(solver, v) ? ub : rat_INFTY;
-
-      // bound_type_rat_t lb, ub;
-      // get_bound(solver, v, true, &lb);
-      // get_bound(solver, v, false, &ub);
-
-      qsx->col_to_var[rat_QSget_colcount(prob)] = v;
-      qsx->var_to_col[v] = rat_QSget_colcount(prob);
-      rat_QSnew_col(prob, rat_oneLpNum, lb_ptr, ub_ptr, NULL);
-
-      rat_clear(lb);
-      rat_clear(ub);
-    }
-
-    // If the variable is not free, it is an auxiliary variable.
-    // We will encode those as rows later.
-  }
-}
-
 typedef struct row_data_s {
   int *col_idxs;
   rat_t *values;
@@ -698,6 +655,51 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
 #pragma region Epsilon mode
 
 /**
+ * Adds all free arithmetic variables as structural columns in the QSopt_ex LP.
+ * Each variable that is valid as a column is assigned the corresponding finite
+ * or infinite lower/upper bounds from the simplex solver, and the mapping
+ * arrays in @p qsx are updated so later row-building logic can refer back to
+ * the original theory variable identifiers. In epsilon mode, any strict bound
+ * is made stricter by using an hardcoded value @f \epsilon @f.
+ * @param solver The simplex solver containing the variable bounds and
+ * definitions.
+ * @param qsx The QSopt_ex problem wrapper receiving the new columns.
+ */
+static void add_cols_epsilon(simplex_solver_t *const solver,
+                             const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+  rat_QSprob prob = qsx->prob;
+
+  // Construct the columns of the LP by assigning upper/lower bounds to each
+  // variable
+  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
+  for (thvar_t v = 0; v < num_vars; v++) {
+    // Free variables. They come from the SMT input. Encode them as columns.
+    if (var_is_valid_column(solver, v)) {
+      rat_t lb, ub;
+      rat_init(lb);
+      rat_init(ub);
+      rat_ptr lb_ptr = has_lb(solver, v) ? lb : rat_NINFTY;
+      rat_ptr ub_ptr = has_ub(solver, v) ? ub : rat_INFTY;
+
+      // bound_type_rat_t lb, ub;
+      // get_bound(solver, v, true, &lb);
+      // get_bound(solver, v, false, &ub);
+
+      qsx->col_to_var[rat_QSget_colcount(prob)] = v;
+      qsx->var_to_col[v] = rat_QSget_colcount(prob);
+      rat_QSnew_col(prob, rat_oneLpNum, lb_ptr, ub_ptr, NULL);
+
+      rat_clear(lb);
+      rat_clear(ub);
+    }
+
+    // If the variable is not free, it is an auxiliary variable.
+    // We will encode those as rows later.
+  }
+}
+
+/**
  * Adds all valid arithmetic row definitions from the simplex solver to the
  * QSopt_ex LP as ranged rows.
  * For each accepted auxiliary variable, the function translates the bound state
@@ -789,6 +791,37 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   safe_free(rd.values);
 }
 
+static void add_cols_matrix_epsilon(simplex_solver_t *const solver,
+                                    const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+}
+
+static void add_rows_matrix_epsilon(simplex_solver_t *const solver,
+                                    const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+}
+
+/**
+ * Builds the LP encoding for the epsilon-mode simplex problem.
+ * @note `add_cols_epsilon` must be called before `add_rows_epsilon`, since
+ * the latter depends on the column indices being populated first.
+ * @param solver The simplex solver whose structural variables and constraints
+ * define the LP.
+ * @param qsx The QSopt_ex wrapper to populate with columns and rows.
+ */
+static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
+                                      qsx_t *const qsx) {
+#if USE_MATRIX
+  add_cols_matrix_epsilon(solver, qsx);
+  add_rows_matrix_epsilon(solver, qsx);
+#else
+  add_cols_epsilon(solver, qsx);
+  add_rows_epsilon(solver, qsx);
+  assert(qsx->n_cols == rat_QSget_colcount(qsx->prob));
+  assert(qsx->n_rows == rat_QSget_rowcount(qsx->prob));
+#endif
+}
+
 /**
  * Extracts every solved value from the epsilon-mode QSopt_ex LP into the
  * external solution record.
@@ -807,22 +840,6 @@ static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
   for (int row_idx = 0; row_idx < rat_QSget_rowcount(*prob); row_idx++) {
     extract_row_value(solver, qsx, sol, row_idx);
   }
-}
-
-/**
- * Builds the LP encoding for the epsilon-mode simplex problem.
- * @note `add_cols_epsilon` must be called before `add_rows_epsilon`, since
- * the latter depends on the column indices being populated first.
- * @param solver The simplex solver whose structural variables and constraints
- * define the LP.
- * @param qsx The QSopt_ex wrapper to populate with columns and rows.
- */
-static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
-                                      qsx_t *const qsx) {
-  add_cols_epsilon(solver, qsx);
-  add_rows_epsilon(solver, qsx);
-  assert(qsx->n_cols == rat_QSget_colcount(qsx->prob));
-  assert(qsx->n_rows == rat_QSget_rowcount(qsx->prob));
 }
 
 #pragma endregion
@@ -1085,6 +1102,16 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   safe_free(rd.values);
 }
 
+static void add_cols_matrix_strict(simplex_solver_t *const solver,
+                                   const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+}
+
+static void add_rows_matrix_strict(simplex_solver_t *const solver,
+                                   const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+}
+
 /**
  * Builds the strict-mode LP representation used when strict mode is enabled.
  * @param solver The simplex solver whose constraints define the problem.
@@ -1092,10 +1119,15 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
  */
 static void qsx_build_problem_strict(simplex_solver_t *const solver,
                                      qsx_t *const qsx) {
+#if USE_MATRIX
+  add_cols_matrix_strict(solver, qsx);
+  add_rows_matrix_strict(solver, qsx);
+#else
   add_cols_strict(solver, qsx);
   add_rows_strict(solver, qsx);
   assert(qsx->n_cols == rat_QSget_colcount(qsx->prob) - 1);
   assert(qsx->n_rows == rat_QSget_rowcount(qsx->prob));
+#endif
 }
 
 /**

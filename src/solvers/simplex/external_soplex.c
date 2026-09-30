@@ -676,49 +676,6 @@ static void spx_clear(spx_t *const spx) {
   clear_and_free(&spx->y, spx->n_rows);
 }
 
-/**
- * Adds all free arithmetic variables as structural columns in the QSopt_ex LP.
- * Each variable that is valid as a column is assigned the corresponding finite
- * or infinite lower/upper bounds from the simplex solver, and the mapping
- * arrays in @p spx are updated so later row-building logic can refer back to
- * the original theory variable identifiers. In epsilon mode, any strict bound
- * is made stricter by using an hardcoded value @f \epsilon @f.
- * @param solver The simplex solver containing the variable bounds and
- * definitions.
- * @param spx The QSopt_ex problem wrapper receiving the new columns.
- */
-static void add_cols_epsilon(simplex_solver_t *const solver,
-                             const spx_t *const spx) {
-  assert(spx->n_cols > 0);
-  void *lp = spx->lp;
-
-  // Construct the columns of the LP by assigning upper/lower bounds to each
-  // variable
-  int col_idx = 0;
-  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
-  for (thvar_t v = 0; v < num_vars; v++) {
-    // Free variables. They come from the SMT input. Encode them as columns.
-    if (var_is_valid_column(solver, v)) {
-      bound_type_t lb, ub;
-      get_bound_copy(solver, v, true, &lb);
-      get_bound_copy(solver, v, false, &ub);
-
-      spx->col_to_var[col_idx] = v;
-      spx->var_to_col[v] = col_idx;
-      SoPlex_addColToLpProblemRational(lp, NULL, 0, 0, mpq_zeroLpNum,
-                                       lb.is_finite ? lb.val : mpq_ninfLpNum,
-                                       ub.is_finite ? ub.val : mpq_infLpNum);
-
-      col_idx++;
-      bound_type_clear(&lb);
-      bound_type_clear(&ub);
-    }
-
-    // If the variable is not free, it is an auxiliary variable.
-    // We will encode those as rows later.
-  }
-}
-
 typedef struct row_data_s {
   int *col_idxs;
   mpq_t *values;
@@ -938,6 +895,49 @@ static void extract_value(simplex_solver_t *const solver, spx_t *const spx,
 }
 
 #pragma region Epsilon mode
+
+/**
+ * Adds all free arithmetic variables as structural columns in the QSopt_ex LP.
+ * Each variable that is valid as a column is assigned the corresponding finite
+ * or infinite lower/upper bounds from the simplex solver, and the mapping
+ * arrays in @p spx are updated so later row-building logic can refer back to
+ * the original theory variable identifiers. In epsilon mode, any strict bound
+ * is made stricter by using an hardcoded value @f \epsilon @f.
+ * @param solver The simplex solver containing the variable bounds and
+ * definitions.
+ * @param spx The QSopt_ex problem wrapper receiving the new columns.
+ */
+static void add_cols_epsilon(simplex_solver_t *const solver,
+                             const spx_t *const spx) {
+  assert(spx->n_cols > 0);
+  void *lp = spx->lp;
+
+  // Construct the columns of the LP by assigning upper/lower bounds to each
+  // variable
+  int col_idx = 0;
+  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
+  for (thvar_t v = 0; v < num_vars; v++) {
+    // Free variables. They come from the SMT input. Encode them as columns.
+    if (var_is_valid_column(solver, v)) {
+      bound_type_t lb, ub;
+      get_bound_copy(solver, v, true, &lb);
+      get_bound_copy(solver, v, false, &ub);
+
+      spx->col_to_var[col_idx] = v;
+      spx->var_to_col[v] = col_idx;
+      SoPlex_addColToLpProblemRational(lp, NULL, 0, 0, mpq_zeroLpNum,
+                                       lb.is_finite ? lb.val : mpq_ninfLpNum,
+                                       ub.is_finite ? ub.val : mpq_infLpNum);
+
+      col_idx++;
+      bound_type_clear(&lb);
+      bound_type_clear(&ub);
+    }
+
+    // If the variable is not free, it is an auxiliary variable.
+    // We will encode those as rows later.
+  }
+}
 
 /**
  * Adds all valid arithmetic row definitions from the simplex solver to the
