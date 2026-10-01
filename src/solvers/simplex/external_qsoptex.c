@@ -676,11 +676,10 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
   for (thvar_t v = 0; v < num_vars; v++) {
     // Free variables. They come from the SMT input. Encode them as columns.
     if (var_is_valid_column(solver, v)) {
-      rat_t lb, ub;
-      rat_init(lb);
-      rat_init(ub);
-      rat_ptr lb_ptr = has_lb(solver, v) ? lb : rat_NINFTY;
-      rat_ptr ub_ptr = has_ub(solver, v) ? ub : rat_INFTY;
+      rat_t temp_lb, temp_ub;
+      rat_init_pair(temp_lb, temp_ub);
+      rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
+      rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
       // bound_type_rat_t lb, ub;
       // get_bound(solver, v, true, &lb);
@@ -688,10 +687,9 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
 
       qsx->col_to_var[rat_QSget_colcount(prob)] = v;
       qsx->var_to_col[v] = rat_QSget_colcount(prob);
-      rat_QSnew_col(prob, rat_oneLpNum, lb_ptr, ub_ptr, NULL);
+      rat_QSnew_col(prob, rat_oneLpNum, lb, ub, NULL);
 
-      rat_clear(lb);
-      rat_clear(ub);
+      rat_clear_pair(temp_lb, temp_ub);
     }
 
     // If the variable is not free, it is an auxiliary variable.
@@ -750,7 +748,7 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
       } else {
         rat_get_bound(solver, v, LOWER_BOUND, qsx->rhs[r]);
         rat_get_bound(solver, v, UPPER_BOUND, qsx->range[r]);
-        rat_sub(qsx->range[r], qsx->range[r], qsx->rhs[r]);
+        rat_sub_self(qsx->range[r], qsx->rhs[r]);
         if (has_strict_lb(solver, v)) {
           // Need to offset the lower bound by epsilon
           rat_sub_si(qsx->range[r], epsilon_num, epsilon_den);
@@ -1047,8 +1045,11 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
         rat_add_q(qsx->rhs[rd.row_idx], get_lb_main(solver, v));
         qsx->sense[rd.row_idx] = 'E';
       } else {
+        // First, we need to ensure that range too is affected by the constant
+        // offest from the polynomial
+        rat_set(qsx->range[rd.row_idx], qsx->rhs[rd.row_idx]);
         rat_add_q(qsx->rhs[rd.row_idx], get_lb_main(solver, v));
-        rat_set_q(qsx->range[rd.row_idx], get_ub_main(solver, v));
+        rat_add_q(qsx->range[rd.row_idx], get_ub_main(solver, v));
         rat_sub_self(qsx->range[rd.row_idx], qsx->rhs[rd.row_idx]);
         qsx->sense[rd.row_idx] = 'R';
       }
