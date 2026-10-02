@@ -59,7 +59,7 @@ void external_solution_clear(external_solution_t *sol) {
   sol->bounds = NULL;
 }
 
-void copy_to_gmp(mpq_t dest, const rational_t *const src) {
+void mpq_set_q(mpq_t dest, const rational_t *const src) {
   if (is_ratgmp(src)) {
     mpq_set(dest, get_gmp(src));
   } else {
@@ -69,7 +69,7 @@ void copy_to_gmp(mpq_t dest, const rational_t *const src) {
 
 void init_and_copy_to_gmp(mpq_t dest, const rational_t *const src) {
   mpq_init(dest);
-  copy_to_gmp(dest, src);
+  mpq_set_q(dest, src);
 }
 
 void mpq_q_sub(mpq_t dest, mpq_t a, const rational_t *const b) {
@@ -295,12 +295,19 @@ import_external_solution(simplex_solver_t *const solver,
   matrix_t *const matrix = &solver->matrix;
   arith_vartable_t *const vtbl = &solver->vtbl;
 
+  // printf("\n\n*** INITIAL ***\n");
+  // print_simplex_vars_summary(stdout, solver);
+
   for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
     // Only update non-basic variables,
     // hoping to get a feasible solution immediately
     if (matrix_is_nonbasic_var(matrix, v) && int_bvset_member(new_nb, v)) {
       // TODO: should we violate the invariant that non-basic variables are at a
       // bound?
+      // printf("\n\n*** Updating %d to ", v);
+      // xq_print(stdout, sol->x + v);
+      // printf(" ***\n");
+      // print_simplex_vars_summary(stdout, solver);
       update_nb_value(solver, sol, v);
       assert(value_satisfies_bounds(solver, v));
     }
@@ -488,7 +495,7 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
 
   solver->stats.external_calls++;
 
-#if 0 && !defined(NDEBUG)
+#if 1 && !defined(NDEBUG)
   printf("\n\n*** SIMPLEX START ***\n");
   print_simplex_vars_summary(stdout, solver);
   printf("==== Pivots ====\n");
@@ -516,8 +523,11 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
     break;
   }
 
-  // printf("\n==== Solution ====\n");
-  // print_external_solution(&solution);
+#if 1
+  printf("\n==== Solution ====\n");
+  print_external_solution(&solution);
+#endif
+
   const external_simplex_status_t status = solution.status;
   switch (status) {
   case EXTERNAL_SIMPLEX_INFEASIBLE:
@@ -528,6 +538,10 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
     break;
   }
 
+#if 0 && !defined(NDEBUG)
+  printf("\n\n*** SIMPLEX FINISHED ***\n");
+  print_simplex_vars_summary(stdout, solver);
+#endif
   external_solution_clear(&solution);
   return status;
 }

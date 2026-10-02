@@ -23,6 +23,8 @@
 #include <soplex_interface.h>
 #include <stdbool.h>
 
+#define USE_MATRIX 1
+
 ///@name Parameters
 ///@{
 #pragma region Parameters
@@ -631,11 +633,16 @@ static void spx_init_vars(simplex_solver_t *const solver, spx_t *spx) {
   // which is equal to the columns of the LP problem.
   spx->n_cols = 0;
   spx->n_rows = 0;
+#if USE_MATRIX // Only estimate rows and cols if we are not using the matrix
+  spx->n_cols = (int)solver->matrix.ncolumns - 1; // Exclude the constant column
+  spx->n_rows = (int)solver->matrix.nrows;
+#else
   if (__smt2_globals.epsilon_mode) {
     spx_estimate_n_cols_and_rows_epsilon(solver, spx);
   } else {
     spx_estimate_n_cols_and_rows_strict(solver, spx);
   }
+#endif
 
   spx->lp = SoPlex_createLpProblemRational(spx->n_cols, spx->n_rows);
   spx->col_to_var = safe_malloc(spx->n_cols * sizeof(thvar_t));
@@ -896,6 +903,105 @@ static void extract_value(simplex_solver_t *const solver, spx_t *const spx,
 
 #pragma region Epsilon mode
 
+#if USE_MATRIX
+/**
+ * Adds all free arithmetic variables as structural columns in the QSopt_ex LP.
+ * Each variable that is valid as a column is assigned the corresponding finite
+ * or infinite lower/upper bounds from the simplex solver, and the mapping
+ * arrays in @p spx are updated so later row-building logic can refer back to
+ * the original theory variable identifiers. In epsilon mode, any strict bound
+ * is made stricter by using an hardcoded value @f \epsilon @f.
+ * @param solver The simplex solver containing the variable bounds and
+ * definitions.
+ * @param spx The QSopt_ex problem wrapper receiving the new columns.
+ */
+static void add_cols_epsilon(simplex_solver_t *const solver,
+                             const spx_t *const spx) {
+  assert(spx->n_cols > 0);
+  void *lp = spx->lp;
+
+  // Construct the columns of the LP by assigning upper/lower bounds to each
+  // variable
+  int col_idx = 0;
+  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
+  // 0 is the constant column, which is not a variable
+  for (thvar_t v = 1; v < num_vars; v++) {
+    bound_type_t lb, ub;
+    get_bound_copy(solver, v, true, &lb);
+    get_bound_copy(solver, v, false, &ub);
+
+    spx->col_to_var[col_idx] = v;
+    spx->var_to_col[v] = col_idx;
+    SoPlex_addColToLpProblemRational(lp, NULL, 0, 0, mpq_zeroLpNum,
+                                     lb.is_finite ? lb.val : mpq_ninfLpNum,
+                                     ub.is_finite ? ub.val : mpq_infLpNum);
+
+    col_idx++;
+    bound_type_clear(&lb);
+    bound_type_clear(&ub);
+  }
+}
+
+/**
+ * Adds all valid arithmetic row definitions from the simplex solver to the
+ * QSopt_ex LP as ranged rows.
+ * For each accepted auxiliary variable, the function translates the bound state
+ * into the row RHS, sense and range, then fills in the sparse coefficient
+ * matrix produced by @ref monomials_to_row.
+ * We ignore constant rows (e.g., p := c)
+ * and unbounded rows (e.g., p: ... with -inf < p < inf).
+ * In epsilon mode, any strict constraint is made stricter
+ * by using an hardcoded value @f \epsilon @f.
+ * @param solver The simplex solver containing the row definitions and bounds.
+ * @param spx The QSopt_ex LP wrapper receiving the encoded rows.
+ */
+static void add_rows_epsilon(simplex_solver_t *const solver,
+                             const spx_t *const spx) {
+  assert(spx->n_rows > 0);
+  matrix_t *const mat = &solver->matrix;
+
+  mpq_t rhs;
+  mpq_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
+  int col_idxs[SoPlex_getNumColsLpProblemRational(spx->lp)];
+  mpq_init(rhs);
+  for (int i = 0; i < SoPlex_getNumColsLpProblemRational(spx->lp); i++) {
+    mpq_init(values[i]);
+  }
+
+  // Add rows to the LP problem
+  int row_idx = 0;
+  for (uint32_t r = 0; r < mat->nrows; r++) {
+    int num_non_zeros = 0;
+    const row_t *const row = matrix_row(mat, r);
+    for (uint32_t i = 0; i < row->size; i++) {
+      const thvar_t v = row->data[i].c_idx;
+      if (v < 0) // Ignore 0 coefficients (i.e., empty columns)
+        continue;
+      if (v == const_idx) // Ignore constant coefficients (i.e., RHS)
+      {
+        mpq_set_q(rhs, &row->data[i].coeff);
+        mpq_neg(rhs, rhs);
+        assert(!mpq_is_zero(rhs));
+        continue;
+      }
+
+      mpq_set_q(values[num_non_zeros], &row->data[i].coeff);
+      col_idxs[num_non_zeros++] = spx->var_to_col[v];
+    }
+
+    SoPlex_addRowToLpProblemRational(spx->lp, values, col_idxs, num_non_zeros,
+                                     rhs, rhs);
+
+    // Add the new row to the map
+    spx->row_to_var[row_idx] = r;
+    spx->var_to_row[r] = row_idx;
+    row_idx++;
+  }
+
+  mpq_clear(rhs);
+  mpq_vector_clear(values, SoPlex_getNumColsLpProblemRational(spx->lp));
+}
+#else
 /**
  * Adds all free arithmetic variables as structural columns in the QSopt_ex LP.
  * Each variable that is valid as a column is assigned the corresponding finite
@@ -995,6 +1101,7 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
 
   mpq_vector_clear(rd.values, SoPlex_getNumColsLpProblemRational(spx->lp));
 }
+#endif
 
 /**
  * Extracts every solved value from the epsilon-mode QSopt_ex LP into the
@@ -1011,9 +1118,11 @@ static void extract_solution_epsilon(simplex_solver_t *solver, spx_t *spx,
   for (int col_idx = 0; col_idx < SoPlex_numCols(prob); col_idx++) {
     extract_value(solver, spx, sol, col_idx, spx->x);
   }
+#if !(USE_MATRIX)
   for (int row_idx = 0; row_idx < SoPlex_numRows(prob); row_idx++) {
     extract_value(solver, spx, sol, row_idx, spx->y);
   }
+#endif
 }
 
 /**
@@ -1123,7 +1232,7 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
         mpq_set(rd.values[1], mpq_negoneLpNum);
         // Set the sense 'Greater Than'
         // Set the right-hand side to the lower bound of the variable
-        copy_to_gmp(rhs, &get_lb(solver, v)->main);
+        mpq_set_q(rhs, &get_lb(solver, v)->main);
 
         SoPlex_addRowToLpProblemRational(spx->lp, rd.values, rd.col_idxs, 2,
                                          rhs, mpq_infLpNum);
@@ -1141,7 +1250,7 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
         mpq_set(rd.values[0], mpq_oneLpNum);
         mpq_set(rd.values[1], mpq_oneLpNum);
         // Set the right-hand side to the lower bound of the variable
-        copy_to_gmp(rhs, &get_ub(solver, v)->main);
+        mpq_set_q(rhs, &get_ub(solver, v)->main);
 
         SoPlex_addRowToLpProblemRational(spx->lp, rd.values, rd.col_idxs, 2,
                                          mpq_ninfLpNum, rhs);
@@ -1428,7 +1537,7 @@ void spx_solve(simplex_solver_t *solver, external_solution_t *sol) {
     spx_build_problem_epsilon(solver, &spx);
   else
     spx_build_problem_strict(solver, &spx);
-#if 0 && !defined(NDEBUG)
+#if 1 && !defined(NDEBUG)
   static int i = 0;
   fprintf(stderr, "Problem %d %s: n_cols = %d, n_rows = %d\n", i,
           __smt2_globals.epsilon_mode ? "epsilon" : "strict", spx.n_cols,

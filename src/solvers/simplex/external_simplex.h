@@ -20,20 +20,23 @@ external_solution_t new_external_solution(uint32_t nvars);
 void external_solution_init(external_solution_t *sol, uint32_t nvars);
 void external_solution_clear(external_solution_t *sol);
 
-
-static inline bool has_lb(const simplex_solver_t *const solver, const thvar_t v) {
+static inline bool has_lb(const simplex_solver_t *const solver,
+                          const thvar_t v) {
   return solver->vtbl.lower_index[v] > -1;
 }
 
-static inline bool has_ub(const simplex_solver_t *const solver, const thvar_t v) {
+static inline bool has_ub(const simplex_solver_t *const solver,
+                          const thvar_t v) {
   return solver->vtbl.upper_index[v] > -1;
 }
 
-static inline bool has_any_bound(const simplex_solver_t *const solver, const thvar_t v) {
+static inline bool has_any_bound(const simplex_solver_t *const solver,
+                                 const thvar_t v) {
   return has_lb(solver, v) || has_ub(solver, v);
 }
 
-static inline bool has_both_bounds(const simplex_solver_t *const solver, const thvar_t v) {
+static inline bool has_both_bounds(const simplex_solver_t *const solver,
+                                   const thvar_t v) {
   return has_lb(solver, v) && has_ub(solver, v);
 }
 
@@ -50,7 +53,7 @@ rational_t *get_lb_main(simplex_solver_t *solver, thvar_t x);
 rational_t *get_ub_main(simplex_solver_t *solver, thvar_t x);
 
 void init_and_copy_to_gmp(mpq_t dest, const rational_t *src);
-void copy_to_gmp(mpq_t dest, const rational_t *src);
+void mpq_set_q(mpq_t dest, const rational_t *src);
 void mpq_q_sub(mpq_t dest, mpq_t a, const rational_t *b);
 void mpq_q_mul(mpq_t dest, mpq_t a, const rational_t *b);
 
@@ -253,10 +256,9 @@ static inline void print_int_heap(const int_heap_t *heap) {
     return;
   }
   printf("int_heap: [");
-  for (uint32_t i = 1; i < heap->size; i++) {
-    printf("%d", heap->heap[i]);
-    if (i < heap->size - 1) {
-      printf(", ");
+  for (uint32_t i = 0; i < heap->idx_size; i++) {
+    if (int_heap_member(heap, i)) {
+      printf(" x_%d", heap->heap[heap->idx[i]]);
     }
   }
   printf("]\n");
