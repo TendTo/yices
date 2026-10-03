@@ -570,6 +570,16 @@ static void spx_estimate_n_cols_and_rows_epsilon(simplex_solver_t *const solver,
   }
 }
 
+static int num_strict_all_vars(const simplex_solver_t *const solver) {
+  int count = 0;
+  for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
+    if (has_strict_lb(solver, v) || has_strict_ub(solver, v)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 static void allocate_and_init(mpq_t **array, const size_t size) {
   assert(*array == NULL);
   *array = safe_malloc(size * sizeof(mpq_t));
@@ -635,7 +645,7 @@ static void spx_init_vars(simplex_solver_t *const solver, spx_t *spx) {
   spx->n_rows = 0;
 #if USE_MATRIX // Only estimate rows and cols if we are not using the matrix
   spx->n_cols = (int)solver->matrix.ncolumns - 1; // Exclude the constant column
-  spx->n_rows = (int)solver->matrix.nrows;
+  spx->n_rows = (int)solver->matrix.nrows + num_strict_all_vars(solver);
 #else
   if (__smt2_globals.epsilon_mode) {
     spx_estimate_n_cols_and_rows_epsilon(solver, spx);
@@ -656,11 +666,11 @@ static void spx_init_vars(simplex_solver_t *const solver, spx_t *spx) {
   spx->y = NULL;
 
   for (uint32_t i = 0; i < spx->n_cols; i++) {
-    spx->col_to_var[i] = -1;
+    spx->col_to_var[i] = null_idx;
   }
 
   for (uint32_t i = 0; i < spx->n_rows; i++) {
-    spx->row_to_var[i] = -1;
+    spx->row_to_var[i] = null_idx;
   }
   for (uint32_t i = 0; i < nvars; i++) {
     spx->var_to_col[i] = -1;
@@ -969,9 +979,9 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   }
 
   // Add rows to the LP problem
-  int row_idx = 0;
   for (uint32_t r = 0; r < mat->nrows; r++) {
     int num_non_zeros = 0;
+    mpq_set(rhs, mpq_zeroLpNum); // Reset the RHS for this row
     const row_t *const row = matrix_row(mat, r);
     for (uint32_t i = 0; i < row->size; i++) {
       const thvar_t v = row->data[i].c_idx;
@@ -991,11 +1001,6 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
 
     SoPlex_addRowToLpProblemRational(spx->lp, values, col_idxs, num_non_zeros,
                                      rhs, rhs);
-
-    // Add the new row to the map
-    spx->row_to_var[row_idx] = r;
-    spx->var_to_row[r] = row_idx;
-    row_idx++;
   }
 
   mpq_clear(rhs);
@@ -1145,6 +1150,146 @@ static void spx_build_problem_epsilon(simplex_solver_t *const solver,
 #pragma endregion
 
 #pragma region Strict mode
+
+#if USE_MATRIX
+
+/**
+ * Reserved placeholder for strict-mode column construction.
+ * This function is intentionally empty because the strict-mode QSopt_ex bridge
+ * is not yet implemented.
+ * @param solver The simplex solver containing the variable definitions.
+ * @param spx The QSopt_ex wrapper that would receive the strict-mode columns.
+ */
+static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
+  assert(spx->n_cols > 0);
+  // Construct the columns of the LP by assigning upper/lower bounds to each
+  // variable
+  int col_idx = 0;
+  int col_idxs[2];
+  mpq_t values[2];
+  mpq_t rhs;
+  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
+  const int strict_var_idx = spx->n_cols - 1;
+
+  mpq_init(rhs);
+  mpq_init(values[0]);
+  mpq_init(values[1]);
+
+  for (thvar_t v = 1; v < num_vars; v++) {
+    // Free variables. They come from the SMT input. Encode them as columns.
+    bound_type_t lb, ub;
+    get_bound_copy(solver, v, true, &lb);
+    get_bound_copy(solver, v, false, &ub);
+
+    spx->col_to_var[col_idx] = v;
+    spx->var_to_col[v] = col_idx;
+    SoPlex_addColToLpProblemRational(
+        spx->lp, NULL, NULL, 0, mpq_zeroLpNum,
+        lb.is_finite && !lb.is_strict ? lb.val : mpq_ninfLpNum,
+        ub.is_finite && !ub.is_strict ? ub.val : mpq_infLpNum);
+
+    col_idx++;
+    bound_type_clear(&lb);
+    bound_type_clear(&ub);
+
+    // Add a strict constraint for each strict bound around a free variable
+    if (has_strict_lb(solver, v)) {
+      assert(has_lb(solver, v));
+      col_idxs[0] = spx->var_to_col[v];
+      col_idxs[1] = strict_var_idx;
+      // Add 1 coeff to the variable and -1 to the strict variable
+      mpq_set(values[0], mpq_oneLpNum);
+      mpq_set(values[1], mpq_negoneLpNum);
+      // Set the sense 'Greater Than'
+      // Set the right-hand side to the lower bound of the variable
+      mpq_set_q(rhs, &get_lb(solver, v)->main);
+
+      // Update the mapping
+      const int n_rows = SoPlex_getNumRowsLpProblemRational(spx->lp);
+      spx->row_to_var[n_rows] = v;
+      spx->var_to_row[v] = n_rows;
+
+      SoPlex_addRowToLpProblemRational(spx->lp, values, col_idxs, 2, rhs,
+                                       mpq_infLpNum);
+    }
+    if (has_strict_ub(solver, v)) {
+      assert(has_ub(solver, v));
+      col_idxs[0] = spx->var_to_col[v];
+      col_idxs[1] = strict_var_idx;
+      // Add 1 coeff to the variable and 1 to the strict variable
+      mpq_set(values[0], mpq_oneLpNum);
+      mpq_set(values[1], mpq_oneLpNum);
+      // Set the right-hand side to the lower bound of the variable
+      mpq_set_q(rhs, &get_ub(solver, v)->main);
+
+      // Update the mapping
+      const int n_rows = SoPlex_getNumRowsLpProblemRational(spx->lp);
+      spx->row_to_var[n_rows] = v;
+      spx->var_to_row[v] = n_rows;
+
+      SoPlex_addRowToLpProblemRational(spx->lp, values, col_idxs, 2,
+                                       mpq_ninfLpNum, rhs);
+    }
+  }
+
+  // At the end, add the strict variable column,
+  // which is used to encode the strict bounds
+  SoPlex_addColToLpProblemRational(spx->lp, NULL, NULL, 0, mpq_negoneLpNum,
+                                   mpq_zeroLpNum, mpq_oneLpNum);
+  mpq_clear(rhs);
+  mpq_clear(values[0]);
+  mpq_clear(values[1]);
+}
+
+/**
+ * Reserved placeholder for strict-mode row construction.
+ * This function is intentionally empty because the strict-mode QSopt_ex bridge
+ * is not yet implemented.
+ * @param solver The simplex solver containing the row definitions.
+ * @param spx The QSopt_ex wrapper that would receive the strict-mode rows.
+ */
+static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
+  assert(spx->n_rows > 0);
+  matrix_t *const mat = &solver->matrix;
+
+  mpq_t rhs;
+  mpq_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
+  int col_idxs[SoPlex_getNumColsLpProblemRational(spx->lp)];
+  mpq_init(rhs);
+  for (int i = 0; i < SoPlex_getNumColsLpProblemRational(spx->lp); i++) {
+    mpq_init(values[i]);
+  }
+
+  // Add rows to the LP problem
+  for (uint32_t r = 0; r < mat->nrows; r++) {
+    int num_non_zeros = 0;
+    mpq_set(rhs, mpq_zeroLpNum); // Reset the RHS for this row
+    const row_t *const row = matrix_row(mat, r);
+    for (uint32_t i = 0; i < row->size; i++) {
+      const thvar_t v = row->data[i].c_idx;
+      if (v < 0) // Ignore 0 coefficients (i.e., empty columns)
+        continue;
+      if (v == const_idx) // Ignore constant coefficients (i.e., RHS)
+      {
+        mpq_set_q(rhs, &row->data[i].coeff);
+        mpq_neg(rhs, rhs);
+        assert(!mpq_is_zero(rhs));
+        continue;
+      }
+
+      mpq_set_q(values[num_non_zeros], &row->data[i].coeff);
+      col_idxs[num_non_zeros++] = spx->var_to_col[v];
+    }
+
+    SoPlex_addRowToLpProblemRational(spx->lp, values, col_idxs, num_non_zeros,
+                                     rhs, rhs);
+  }
+
+  mpq_clear(rhs);
+  mpq_vector_clear(values, SoPlex_getNumColsLpProblemRational(spx->lp));
+}
+
+#else
 
 /**
  * Reserved placeholder for strict-mode column construction.
@@ -1336,6 +1481,7 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
   mpq_vector_clear(rd.values, SoPlex_getNumColsLpProblemRational(spx->lp));
   mpq_clear(rhs);
 }
+#endif
 
 /**
  * Builds the strict-mode LP representation used when strict mode is enabled.
@@ -1421,6 +1567,10 @@ static void extract_solution_strict(simplex_solver_t *solver, spx_t *spx,
     // We already encountered the nonbasic version of this row, we can skip it
     if (int_bvset_member(&sol->nb_vars, spx->row_to_var[row_idx]))
       continue;
+#if USE_MATRIX
+    if (spx->row_to_var[row_idx] == null_idx)
+      continue;
+#endif
     extract_value(solver, spx, sol, row_idx, spx->y);
   }
 
