@@ -305,7 +305,7 @@ import_external_solution(simplex_solver_t *const solver,
 
   int_bvset_t *const new_nb = &sol->nb_vars;
   matrix_t *const matrix = &solver->matrix;
-  arith_vartable_t *const vtbl = &solver->vtbl;
+  const arith_vartable_t *const vtbl = &solver->vtbl;
 
   // printf("\n\n*** INITIAL ***\n");
   // print_simplex_vars_summary(stdout, solver);
@@ -364,7 +364,7 @@ import_external_solution(simplex_solver_t *const solver,
 
   bool performed_pivot = true;
   while (n_missing_nb_vars > 0 &&
-         !int_heap_is_empty(&solver->infeasible_vars) && !performed_pivot) {
+         !int_heap_is_empty(&solver->infeasible_vars) && performed_pivot) {
     performed_pivot = false;
 
     // Go over all variables that we need to add to the basis
@@ -535,7 +535,7 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
     break;
   }
 
-#if 1
+#if 0
   printf("\n==== Solution ====\n");
   print_external_solution(&solution);
 #endif
