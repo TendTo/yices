@@ -209,6 +209,17 @@ static void sync_infeasible_vars(simplex_solver_t *const solver) {
   }
 }
 
+static void simplex_clear_bound_flags(simplex_solver_t *solver, thvar_t x) {
+  uint8_t t;
+
+  assert(!variable_at_lower_bound(solver, x) &&
+         !variable_at_upper_bound(solver, x));
+
+  t = arith_var_tag(&solver->vtbl, x);
+  t &= ~(AVARTAG_ATLB_MASK | AVARTAG_ATUB_MASK); // clear both bits
+  set_arith_var_tag(&solver->vtbl, x, t);
+}
+
 /*
  * Make the currently basic variable v with a non basic variable in its row,
  * making v non-basic and the new variable basic.
@@ -279,6 +290,7 @@ static bool alignment_pivot(simplex_solver_t *const solver,
     // If we are dealing with a free variable, just assign it the value from sol
     assert(!has_any_bound(solver, v));
     update_non_basic_var_value(solver, v, sol->x + v);
+    simplex_clear_bound_flags(solver, v);
     assert(value_satisfies_bounds(solver, v));
     return true;
   }
