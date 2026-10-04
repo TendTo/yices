@@ -67,11 +67,6 @@ void mpq_set_q(mpq_t dest, const rational_t *const src) {
   }
 }
 
-void init_and_copy_to_gmp(mpq_t dest, const rational_t *const src) {
-  mpq_init(dest);
-  mpq_set_q(dest, src);
-}
-
 void mpq_sub_q(mpq_t dest, mpq_t a, const rational_t *const b) {
   if (is_ratgmp(b)) {
     mpq_sub(dest, a, get_gmp(b));
@@ -81,7 +76,7 @@ void mpq_sub_q(mpq_t dest, mpq_t a, const rational_t *const b) {
   }
 }
 
-void mpq_q_mul(mpq_t dest, mpq_t a, const rational_t *const b) {
+void mpq_mul_q(mpq_t dest, mpq_t a, const rational_t *const b) {
   if (is_ratgmp(b)) {
     mpq_mul(dest, a, get_gmp(b));
   } else {
@@ -368,8 +363,7 @@ import_external_solution(simplex_solver_t *const solver,
     performed_pivot = false;
 
     // Go over all variables that we need to add to the basis
-    thvar_t v = 0;
-    for (; v < solver->vtbl.nvars; v++) {
+    for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
       if (!int_bvset_member(&missing_nb_vars, v)) {
         continue;
       }
