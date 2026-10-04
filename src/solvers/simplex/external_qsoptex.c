@@ -104,8 +104,25 @@ static inline void rat_sub_q(rat_t rat, const rational_t *q) {
   }
 }
 
-const bool LOWER_BOUND = true;
-const bool UPPER_BOUND = false;
+static const bool LOWER_BOUND = true;
+static const bool UPPER_BOUND = false;
+
+// TODO: REMOVE
+static inline void print_rat_vector(const rat_t v[], const int n,
+                                    const char *name) {
+  if (v == NULL) {
+    printf("%s: NULL\n", name);
+    return;
+  }
+  printf("%s: [", name);
+  for (int i = 0; i < n; i++) {
+    rat_print(stdout, v[i]);
+    if (i < n - 1) {
+      printf(", ");
+    }
+  }
+  printf("]\n");
+}
 
 static rat_ptr rat_get_bound(const simplex_solver_t *const solver,
                              const thvar_t v, const bool is_lower_bound,
@@ -313,11 +330,18 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   // which is equal to the columns of the LP problem.
   qsx->n_cols = 0;
   qsx->n_rows = 0;
+#if USE_MATRIX // Only estimate rows and cols if we are not using the matrix
+  qsx->n_cols = (int)solver->matrix.ncolumns - 1; // Exclude the constant column
+  qsx->n_rows =
+      (int)solver->matrix.nrows +
+      (__smt2_globals.epsilon_mode ? 0 : num_strict_all_vars(solver));
+#else
   if (__smt2_globals.epsilon_mode) {
     qsx_estimate_n_cols_and_rows_epsilon(solver, qsx);
   } else {
     qsx_estimate_n_cols_and_rows_strict(solver, qsx);
   }
+#endif
 
   qsx->col_to_var = safe_malloc(qsx->n_cols * sizeof(thvar_t));
   qsx->row_to_var = safe_malloc(qsx->n_rows * sizeof(thvar_t));
@@ -336,12 +360,12 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   qsx->sense = safe_malloc(qsx->n_rows * sizeof(char));
 
   for (uint32_t i = 0; i < qsx->n_cols; i++) {
-    qsx->col_to_var[i] = -1;
+    qsx->col_to_var[i] = null_idx;
   }
   rat_set(qsx->x[qsx->n_cols], rat_oneLpNum); // Initialize the strict var
 
   for (uint32_t i = 0; i < qsx->n_rows; i++) {
-    qsx->row_to_var[i] = -1;
+    qsx->row_to_var[i] = null_idx;
   }
   for (uint32_t i = 0; i < nvars; i++) {
     qsx->var_to_col[i] = -1;
@@ -654,6 +678,183 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
 
 #pragma region Epsilon mode
 
+#define GUESS_DIR 1
+#if GUESS_DIR
+static const rat_t *guess_dir(simplex_solver_t *const solver, const thvar_t v) {
+  if (!has_any_bound(solver, v)) {
+    return &rat_zeroLpNum;
+  }
+  if (has_lb(solver, v) && !has_ub(solver, v)) {
+    return &rat_oneLpNum;
+  }
+  if (!has_lb(solver, v) && has_ub(solver, v)) {
+    return &rat_negoneLpNum;
+  }
+  const int lb_sng = q_sgn(get_lb_main(solver, v));
+  const int ub_sgn = q_sgn(get_ub_main(solver, v));
+
+  if (ub_sgn != 0 && lb_sng == 0) {
+    return &rat_oneLpNum;
+  }
+  if (ub_sgn == 0 && lb_sng != 0) {
+    return &rat_negoneLpNum;
+  }
+
+  return &rat_zeroLpNum;
+}
+#else
+static const rat_t *guess_dir(simplex_solver_t *const, const thvar_t) {
+  return &rat_zeroLpNum;
+}
+#endif
+
+#if USE_MATRIX
+
+static void add_cols_epsilon(simplex_solver_t *const solver,
+                             const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+  rat_QSprob prob = qsx->prob;
+  rat_t temp_lb, temp_ub;
+  rat_init_pair(temp_lb, temp_ub);
+
+  // 0 is the constant column, which is not a variable
+  for (thvar_t v = 1; v < solver->vtbl.nvars; v++) {
+    rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
+    rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
+    assert(rat_is_gmp(lb) || rat_get_den(lb) > 0);
+    assert(rat_is_gmp(ub) || rat_get_den(ub) > 0);
+
+    const int n_cols = rat_QSget_colcount(prob);
+    qsx->col_to_var[n_cols] = v;
+    qsx->var_to_col[v] = n_cols;
+
+#if 1 && !defined(NDEBUG)
+    char buf[64];
+    if (arith_var_is_int(&solver->vtbl, v)) {
+      sprintf(buf, "i!%d", v);
+    } else {
+      sprintf(buf, "z!%d", v);
+    }
+    // sprintf(buf, "x%d", rat_QSget_colcount(prob));
+#endif
+
+    rat_QSnew_col(prob, *guess_dir(solver, v), lb, ub,
+#if 1 && !defined(NDEBUG)
+                  buf
+#else
+                  NULL
+#endif
+    );
+  }
+  rat_clear_pair(temp_lb, temp_ub);
+}
+
+static void add_rows_epsilon(simplex_solver_t *const solver,
+                             const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+  matrix_t *const mat = &solver->matrix;
+  rat_QSprob prob = qsx->prob;
+#if 1 && !defined(NDEBUG)
+  char **row_names = safe_malloc(sizeof(char *) * qsx->n_rows);
+#endif
+
+  int non_zero_per_row[mat->nrows];
+  int begin_row_idx[mat->nrows];
+  // TODO: it may be worth checking the number
+  //  of non-zero elements in the matrix and allocating only that much
+  int *col_idxs =
+      safe_malloc(rat_QSget_colcount(prob) * mat->nrows * sizeof(int));
+  rat_t *values =
+      safe_malloc(rat_QSget_colcount(prob) * mat->nrows * sizeof(rat_t));
+
+  int row_idx = 0, col_idxs_idx = 0, values_idx = 0;
+
+  for (uint32_t r = 0; r < mat->nrows; r++) {
+    // if (matrix_row_count(mat, r) == 0) // Skip empty rows
+    //   continue;
+
+    // where the non-zero columns of the row are stored
+    begin_row_idx[row_idx] = col_idxs_idx;
+    qsx->sense[row_idx] = 'E';
+
+    const row_t *const row = matrix_row(mat, r);
+    for (uint32_t i = 0; i < row->size; i++) {
+      const thvar_t v = row->data[i].c_idx;
+      if (v < 0) // Ignore 0 coefficients (i.e., empty columns)
+        continue;
+      if (v == const_idx) // Ignore constant coefficients (i.e., RHS)
+      {
+        rat_sub_q(qsx->rhs[row_idx], &row->data[i].coeff);
+        assert(qsx->rhs[row_idx] || rat_get_den(qsx->rhs[row_idx]) > 0);
+        continue;
+      }
+      col_idxs[col_idxs_idx++] = qsx->var_to_col[row->data[i].c_idx];
+      rat_init(values[values_idx]);
+      rat_set_q(values[values_idx++], &row->data[i].coeff);
+      assert(!rat_is_zero(values[values_idx - 1]));
+      assert(rat_is_gmp(values[values_idx - 1]) ||
+             rat_get_den(values[values_idx - 1]) > 0);
+    }
+
+#if 1 && !defined(NDEBUG)
+    row_names[r] = safe_malloc(64 * sizeof(char));
+    sprintf(row_names[r], "r%d", r);
+#endif
+
+    // For each row, we set the number of non-zero coefficients
+    // (i.e., the size of the row)
+    non_zero_per_row[row_idx] = (int)row->nelems;
+    row_idx++;
+  }
+
+#if 0
+  printf("Strict-mode LP has %d/%d rows and %d columns\n", row_idx, mat->nrows,
+         rat_QSget_colcount(prob));
+  printf("Added %d rows to the strict-mode LP\n", row_idx);
+  printf("Added %d/%d non-zero values to the strict-mode LP\n", col_idxs_idx,
+         rat_QSget_colcount(prob) * mat->nrows);
+  print_int_vector(non_zero_per_row, row_idx, "Non-zero per row");
+  print_int_vector(begin_row_idx, row_idx, "Begin row index");
+  print_int_vector(col_idxs, col_idxs_idx, "Col indices");
+  print_rat_vector(values, values_idx, "Values");
+  print_rat_vector(qsx->rhs, row_idx, "RHS");
+  print_char_vector(qsx->sense, row_idx, "Sense");
+  print_rat_vector(qsx->range, row_idx, "Range");
+#endif
+
+  // Since they are all equality constraints,
+  // we can use the simpler rat_QSadd_rows function
+  rat_QSadd_rows(prob, row_idx, non_zero_per_row, begin_row_idx, col_idxs,
+                 values, qsx->rhs, qsx->sense,
+#if 1 && !defined(NDEBUG)
+                 row_names
+#else
+                 NULL
+#endif
+  );
+
+  // rat_QSadd_ranged_rows(prob, row_idx, non_zero_per_row, begin_row_idx,
+  //                       col_idxs, values, qsx->rhs, qsx->sense, qsx->range,
+  //                       NULL);
+
+#if 1 && !defined(NDEBUG)
+  // Free the row names
+  for (int i = 0; i < qsx->n_rows; i++) {
+    safe_free(row_names[i]);
+  }
+  safe_free(row_names);
+
+  for (int i = 0; i < values_idx; i++) {
+    assert(rat_is_gmp(values[i]) || rat_get_den(values[i]) > 0);
+  }
+#endif
+
+  rat_array_clear(values, values_idx);
+  safe_free(col_idxs);
+  safe_free(values);
+}
+#else
+
 /**
  * Adds all free arithmetic variables as structural columns in the QSopt_ex LP.
  * Each variable that is valid as a column is assigned the corresponding finite
@@ -669,32 +870,49 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
                              const qsx_t *const qsx) {
   assert(qsx->n_cols > 0);
   rat_QSprob prob = qsx->prob;
+  rat_t temp_lb, temp_ub;
+  rat_init_pair(temp_lb, temp_ub);
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
   for (thvar_t v = 0; v < num_vars; v++) {
-    // Free variables. They come from the SMT input. Encode them as columns.
-    if (var_is_valid_column(solver, v)) {
-      rat_t temp_lb, temp_ub;
-      rat_init_pair(temp_lb, temp_ub);
-      rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
-      rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
-
-      // bound_type_rat_t lb, ub;
-      // get_bound(solver, v, true, &lb);
-      // get_bound(solver, v, false, &ub);
-
-      qsx->col_to_var[rat_QSget_colcount(prob)] = v;
-      qsx->var_to_col[v] = rat_QSget_colcount(prob);
-      rat_QSnew_col(prob, rat_oneLpNum, lb, ub, NULL);
-
-      rat_clear_pair(temp_lb, temp_ub);
+    if (!var_is_valid_column(solver, v)) {
+      continue;
     }
+    // Free variables. They come from the SMT input. Encode them as columns.
+    rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
+    rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
+
+    // bound_type_rat_t lb, ub;
+    // get_bound(solver, v, true, &lb);
+    // get_bound(solver, v, false, &ub);
+
+    qsx->col_to_var[rat_QSget_colcount(prob)] = v;
+    qsx->var_to_col[v] = rat_QSget_colcount(prob);
+
+#if 1 && !defined(NDEBUG)
+    char buf[64];
+    if (arith_var_is_int(&solver->vtbl, v)) {
+      sprintf(buf, "i!%d", v);
+    } else {
+      sprintf(buf, "z!%d", v);
+    }
+    // sprintf(buf, "x%d", rat_QSget_colcount(prob));
+#endif
+
+    rat_QSnew_col(prob, *guess_dir(solver, v), lb, ub,
+#if 1 && !defined(NDEBUG)
+                  buf
+#else
+                  NULL
+#endif
+    );
 
     // If the variable is not free, it is an auxiliary variable.
     // We will encode those as rows later.
   }
+  rat_clear_pair(temp_lb, temp_ub);
 }
 
 /**
@@ -716,6 +934,9 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   rat_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_rows];
   int begin_row_idx[qsx->n_rows];
+#if 1 && !defined(NDEBUG)
+  char **row_names = safe_malloc(sizeof(char *) * qsx->n_rows);
+#endif
 
   row_data_t rd = {.col_idxs = safe_malloc(
                        sizeof(int) * rat_QSget_colcount(prob) * qsx->n_rows),
@@ -774,6 +995,16 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
     // (i.e., the size of the row)
     non_zero_per_row[r] = num_non_zeros;
 
+#if 1 && !defined(NDEBUG)
+    row_names[r] = safe_malloc(64 * sizeof(char));
+    if (arith_var_is_int(&solver->vtbl, v)) {
+      sprintf(row_names[r], "i!%d", v);
+    } else {
+      sprintf(row_names[r], "z!%d", v);
+    }
+    // sprintf(row_names[r], "C%d_1", r);
+#endif
+
     // Add the new row to the map
     qsx->row_to_var[r] = v;
     qsx->var_to_row[v] = r;
@@ -782,22 +1013,27 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
 
   rat_QSadd_ranged_rows(prob, rd.row_idx, non_zero_per_row, begin_row_idx,
                         rd.col_idxs, rd.values, qsx->rhs, qsx->sense,
-                        qsx->range, NULL);
+                        qsx->range,
+#if 1 && !defined(NDEBUG)
+                        row_names
+#else
+                        NULL
+#endif
+  );
+
+#if 1 && !defined(NDEBUG)
+  // Free the row names
+  for (int i = 0; i < qsx->n_rows; i++) {
+    safe_free(row_names[i]);
+  }
+  safe_free(row_names);
+#endif
 
   rat_array_clear(rd.values, rd.values_idx);
   safe_free(rd.col_idxs);
   safe_free(rd.values);
 }
-
-static void add_cols_matrix_epsilon(simplex_solver_t *const solver,
-                                    const qsx_t *const qsx) {
-  assert(qsx->n_cols > 0);
-}
-
-static void add_rows_matrix_epsilon(simplex_solver_t *const solver,
-                                    const qsx_t *const qsx) {
-  assert(qsx->n_cols > 0);
-}
+#endif
 
 /**
  * Builds the LP encoding for the epsilon-mode simplex problem.
@@ -809,15 +1045,10 @@ static void add_rows_matrix_epsilon(simplex_solver_t *const solver,
  */
 static void qsx_build_problem_epsilon(simplex_solver_t *const solver,
                                       qsx_t *const qsx) {
-#if USE_MATRIX
-  add_cols_matrix_epsilon(solver, qsx);
-  add_rows_matrix_epsilon(solver, qsx);
-#else
   add_cols_epsilon(solver, qsx);
   add_rows_epsilon(solver, qsx);
   assert(qsx->n_cols == rat_QSget_colcount(qsx->prob));
   assert(qsx->n_rows == rat_QSget_rowcount(qsx->prob));
-#endif
 }
 
 /**
@@ -835,14 +1066,177 @@ static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
   for (int col_idx = 0; col_idx < rat_QSget_colcount(*prob); col_idx++) {
     extract_col_value(solver, qsx, sol, col_idx);
   }
+#if !(USE_MATRIX)
   for (int row_idx = 0; row_idx < rat_QSget_rowcount(*prob); row_idx++) {
     extract_row_value(solver, qsx, sol, row_idx);
   }
+#endif
 }
 
 #pragma endregion
 
 #pragma region Strict mode
+
+#if USE_MATRIX
+static void add_cols_strict(simplex_solver_t *const solver,
+                            const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+  rat_QSprob prob = qsx->prob;
+  rat_t temp_lb, temp_ub;
+  rat_init_pair(temp_lb, temp_ub);
+
+  // Construct the columns of the LP by assigning upper/lower bounds to each
+  // variable
+  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
+  for (thvar_t v = 1; v < num_vars; v++) {
+    rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
+    rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
+
+    const int n_cols = rat_QSget_colcount(prob);
+    qsx->col_to_var[n_cols] = v;
+    qsx->var_to_col[v] = n_cols;
+    rat_QSnew_col(prob, rat_zeroLpNum,
+                  !has_strict_lb(solver, v) ? lb : rat_NINFTY,
+                  !has_strict_ub(solver, v) ? ub : rat_INFTY, NULL);
+
+    // If the variable is not free, it is an auxiliary variable.
+    // We will encode those as rows later.
+  }
+
+  // At the end, add the strict variable column,
+  // which is used to encode the strict bounds
+  rat_QSnew_col(prob, rat_negoneLpNum, rat_zeroLpNum, rat_oneLpNum, NULL);
+  rat_clear_pair(temp_lb, temp_ub);
+}
+
+static void add_rows_strict(simplex_solver_t *const solver,
+                            const qsx_t *const qsx) {
+  assert(qsx->n_cols > 0);
+
+  assert(qsx->n_rows > 0);
+  rat_QSprob prob = qsx->prob;
+  matrix_t *const mat = &solver->matrix;
+  int non_zero_per_row[qsx->n_rows];
+  int begin_row_idx[qsx->n_rows];
+  const int strict_var_idx = qsx->n_cols;
+  int *const col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows);
+  rat_t *const values = safe_malloc(sizeof(rat_t) * qsx->n_cols * qsx->n_rows);
+  int col_idxs_idx = 0;
+  int values_idx = 0;
+  int row_idx = 0;
+
+  // Add rows to the LP problem
+  const int32_t n_vars = (int32_t)solver->vtbl.nvars;
+  for (thvar_t v = 1; v < n_vars; v++) {
+    if (!has_strict_lb(solver, v) && !has_strict_ub(solver, v)) {
+      continue;
+    }
+    assert(has_any_bound(solver, v));
+    // Add a strict constraint for each strict bound around a free variable
+    assert(has_strict_lb(solver, v) || has_strict_ub(solver, v));
+    if (has_strict_lb(solver, v)) {
+      assert(has_lb(solver, v));
+      non_zero_per_row[row_idx] = 2;
+      begin_row_idx[row_idx] = col_idxs_idx;
+      col_idxs[col_idxs_idx++] = qsx->var_to_col[v];
+      col_idxs[col_idxs_idx++] = qsx->n_cols;
+      // Add 1 coeff to the variable and -1 to the strict variable
+      rat_init(values[values_idx]);
+      rat_set(values[values_idx++], rat_oneLpNum);
+      rat_init(values[values_idx]);
+      rat_set(values[values_idx++], rat_negoneLpNum);
+      // Set the sense 'Greater Than'
+      qsx->sense[row_idx] = 'G';
+      // Set the right-hand side to the lower bound of the variable
+      rat_set_q(qsx->rhs[row_idx], &get_lb(solver, v)->main);
+      // No need for range
+      rat_set(qsx->range[row_idx], rat_zeroLpNum);
+      // Update the mapping and increment the row index
+      qsx->row_to_var[row_idx] = v;
+      qsx->var_to_row[v] = row_idx;
+      row_idx++;
+    }
+    if (has_strict_ub(solver, v)) {
+      assert(has_ub(solver, v));
+      non_zero_per_row[row_idx] = 2;
+      begin_row_idx[row_idx] = col_idxs_idx;
+      col_idxs[col_idxs_idx++] = qsx->var_to_col[v];
+      col_idxs[col_idxs_idx++] = strict_var_idx;
+      // Add 1 coeff to the variable and 1 to the strict variable
+      rat_init(values[values_idx]);
+      rat_set(values[values_idx++], rat_oneLpNum);
+      rat_init(values[values_idx]);
+      rat_set(values[values_idx++], rat_oneLpNum);
+      // Set the sense 'Greater Than'
+      qsx->sense[row_idx] = 'L';
+      // Set the right-hand side to the lower bound of the variable
+      rat_set_q(qsx->rhs[row_idx], &get_ub(solver, v)->main);
+      // No need for range
+      rat_set(qsx->range[row_idx], rat_zeroLpNum);
+      // Update the mapping and increment the row index
+      qsx->row_to_var[row_idx] = v;
+      qsx->var_to_row[v] = row_idx;
+      row_idx++;
+    }
+  }
+
+  for (uint32_t r = 0; r < mat->nrows; r++) {
+    // if (matrix_row_count(mat, r) == 0) // Skip empty rows
+    //   continue;
+
+    // where the non-zero columns of the row are stored
+    begin_row_idx[row_idx] = col_idxs_idx;
+    qsx->sense[row_idx] = 'E';
+
+    const row_t *const row = matrix_row(mat, r);
+    for (uint32_t i = 0; i < row->size; i++) {
+      const thvar_t v = row->data[i].c_idx;
+      if (v < 0) // Ignore 0 coefficients (i.e., empty columns)
+        continue;
+      if (v == const_idx) // Ignore constant coefficients (i.e., RHS)
+      {
+        rat_sub_q(qsx->rhs[row_idx], &row->data[i].coeff);
+        assert(qsx->rhs[row_idx] || rat_get_den(qsx->rhs[row_idx]) > 0);
+        continue;
+      }
+      col_idxs[col_idxs_idx++] = qsx->var_to_col[row->data[i].c_idx];
+      rat_init(values[values_idx]);
+      rat_set_q(values[values_idx++], &row->data[i].coeff);
+      assert(!rat_is_zero(values[values_idx - 1]));
+      assert(rat_is_gmp(values[values_idx - 1]) ||
+             rat_get_den(values[values_idx - 1]) > 0);
+    }
+
+    // For each row, we set the number of non-zero coefficients
+    // (i.e., the size of the row)
+    non_zero_per_row[row_idx] = (int)row->nelems;
+    row_idx++;
+  }
+
+#if 1 && !defined(NDEBUG)
+  printf("Strict-mode LP has %d rows and %d columns\n", qsx->n_rows,
+         qsx->n_cols);
+  printf("Added %d rows to the strict-mode LP\n", row_idx);
+  print_int_vector(non_zero_per_row, row_idx, "Non-zero per row");
+  print_int_vector(begin_row_idx, row_idx, "Begin row index");
+  print_int_vector(col_idxs, col_idxs_idx, "Col indices");
+  print_rat_vector(values, values_idx, "Values");
+  print_rat_vector(qsx->rhs, row_idx, "RHS");
+  print_char_vector(qsx->sense, row_idx, "Sense");
+  print_rat_vector(qsx->range, row_idx, "Range");
+#endif
+
+  rat_QSadd_ranged_rows(prob, row_idx, non_zero_per_row, begin_row_idx,
+                        col_idxs, values, qsx->rhs, qsx->sense, qsx->range,
+                        NULL);
+
+  assert(row_idx == qsx->n_rows && row_idx == rat_QSget_rowcount(prob));
+  rat_array_clear(values, values_idx);
+  safe_free(col_idxs);
+  safe_free(values);
+}
+
+#else
 
 /**
  * Reserved placeholder for strict-mode column construction.
@@ -854,6 +1248,8 @@ static void extract_solution_epsilon(simplex_solver_t *solver, qsx_t *qsx,
 static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   assert(qsx->n_cols > 0);
   rat_QSprob prob = qsx->prob;
+  rat_t temp_lb, temp_ub;
+  rat_init_pair(temp_lb, temp_ub);
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
@@ -861,8 +1257,6 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   for (thvar_t v = 0; v < num_vars; v++) {
     // Free variables. They come from the SMT input. Encode them as columns.
     if (var_is_valid_column(solver, v)) {
-      rat_t temp_lb, temp_ub;
-      rat_init_pair(temp_lb, temp_ub);
       rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
       rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
@@ -871,8 +1265,6 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
       rat_QSnew_col(prob, rat_zeroLpNum,
                     !has_strict_lb(solver, v) ? lb : rat_NINFTY,
                     !has_strict_ub(solver, v) ? ub : rat_INFTY, NULL);
-
-      rat_clear_pair(temp_lb, temp_ub);
     }
 
     // If the variable is not free, it is an auxiliary variable.
@@ -882,6 +1274,7 @@ static void add_cols_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   // At the end, add the strict variable column,
   // which is used to encode the strict bounds
   rat_QSnew_col(prob, rat_negoneLpNum, rat_zeroLpNum, rat_oneLpNum, NULL);
+  rat_clear_pair(temp_lb, temp_ub);
 }
 
 /**
@@ -1080,7 +1473,7 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
     rd.row_idx++;
   }
 
-#if 0 && !defined(NDEBUG)
+#if 1 && !defined(NDEBUG)
   printf("Strict-mode LP has %d rows and %d columns\n", qsx->n_rows,
          qsx->n_cols);
   printf("Added %d rows to the strict-mode LP\n", rd.row_idx);
@@ -1102,16 +1495,7 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   safe_free(rd.col_idxs);
   safe_free(rd.values);
 }
-
-static void add_cols_matrix_strict(simplex_solver_t *const solver,
-                                   const qsx_t *const qsx) {
-  assert(qsx->n_cols > 0);
-}
-
-static void add_rows_matrix_strict(simplex_solver_t *const solver,
-                                   const qsx_t *const qsx) {
-  assert(qsx->n_cols > 0);
-}
+#endif
 
 /**
  * Builds the strict-mode LP representation used when strict mode is enabled.
@@ -1120,15 +1504,10 @@ static void add_rows_matrix_strict(simplex_solver_t *const solver,
  */
 static void qsx_build_problem_strict(simplex_solver_t *const solver,
                                      qsx_t *const qsx) {
-#if USE_MATRIX
-  add_cols_matrix_strict(solver, qsx);
-  add_rows_matrix_strict(solver, qsx);
-#else
   add_cols_strict(solver, qsx);
   add_rows_strict(solver, qsx);
   assert(qsx->n_cols == rat_QSget_colcount(qsx->prob) - 1);
   assert(qsx->n_rows == rat_QSget_rowcount(qsx->prob));
-#endif
 }
 
 /**
@@ -1189,6 +1568,10 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
     // We already encountered the nonbasic version of this row, we can skip it
     if (int_bvset_member(&sol->nb_vars, qsx->row_to_var[row_idx]))
       continue;
+#if USE_MATRIX
+    if (qsx->row_to_var[row_idx] == null_idx)
+      continue;
+#endif
     extract_row_value(solver, qsx, sol, row_idx);
   }
 
@@ -1269,7 +1652,7 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
     qsx_build_problem_epsilon(solver, &qsx);
   else
     qsx_build_problem_strict(solver, &qsx);
-#if 0 && !defined(NDEBUG)
+#if 1 && !defined(NDEBUG)
   static int i = 0;
   rat_QSdump_prob(qsx.prob);
   fprintf(stderr, "Problem %d %s: n_cols = %d, n_rows = %d\n", i,
