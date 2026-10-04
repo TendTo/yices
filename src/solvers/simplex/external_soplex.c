@@ -573,9 +573,7 @@ static void spx_estimate_n_cols_and_rows_epsilon(simplex_solver_t *const solver,
 static int num_strict_all_vars(const simplex_solver_t *const solver) {
   int count = 0;
   for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
-    if (has_strict_lb(solver, v) || has_strict_ub(solver, v)) {
-      count += 1;
-    }
+    count += has_strict_lb(solver, v) + has_strict_ub(solver, v);
   }
   return count;
 }
@@ -645,7 +643,10 @@ static void spx_init_vars(simplex_solver_t *const solver, spx_t *spx) {
   spx->n_rows = 0;
 #if USE_MATRIX // Only estimate rows and cols if we are not using the matrix
   spx->n_cols = (int)solver->matrix.ncolumns - 1; // Exclude the constant column
-  spx->n_rows = (int)solver->matrix.nrows + num_strict_all_vars(solver);
+  // If we are in strict mode, we need to add an additional row for each strict
+  // bound on a variable.
+  spx->n_rows = (int)solver->matrix.nrows +
+                (__smt2_globals.epsilon_mode ? 0 : num_strict_all_vars(solver));
 #else
   if (__smt2_globals.epsilon_mode) {
     spx_estimate_n_cols_and_rows_epsilon(solver, spx);
@@ -1169,7 +1170,7 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
   mpq_t values[2];
   mpq_t rhs;
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
-  const int strict_var_idx = spx->n_cols - 1;
+  const int strict_var_idx = spx->n_cols;
 
   mpq_init(rhs);
   mpq_init(values[0]);
