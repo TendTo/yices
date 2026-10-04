@@ -604,14 +604,6 @@ static void spx_estimate_n_cols_and_rows_epsilon(simplex_solver_t *const solver,
   }
 }
 
-static int num_strict_all_vars(const simplex_solver_t *const solver) {
-  int count = 0;
-  for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
-    count += has_strict_lb(solver, v) + has_strict_ub(solver, v);
-  }
-  return count;
-}
-
 static void allocate_and_init(mpq_t **array, const size_t size) {
   assert(*array == NULL);
   *array = safe_malloc(size * sizeof(mpq_t));
@@ -703,7 +695,6 @@ static void spx_init_vars(simplex_solver_t *const solver, spx_t *spx) {
   for (uint32_t i = 0; i < spx->n_cols; i++) {
     spx->col_to_var[i] = null_idx;
   }
-
   for (uint32_t i = 0; i < spx->n_rows; i++) {
     spx->row_to_var[i] = null_idx;
   }

@@ -52,6 +52,14 @@ xrational_t *get_ub(simplex_solver_t *solver, thvar_t x);
 rational_t *get_lb_main(simplex_solver_t *solver, thvar_t x);
 rational_t *get_ub_main(simplex_solver_t *solver, thvar_t x);
 
+static inline int num_strict_all_vars(const simplex_solver_t *const solver) {
+  int count = 0;
+  for (thvar_t v = 1; v < solver->vtbl.nvars; v++) {
+    count += has_strict_lb(solver, v) + has_strict_ub(solver, v);
+  }
+  return count;
+}
+
 void mpq_set_q(mpq_t dest, const rational_t *src);
 void mpq_sub_q(mpq_t dest, mpq_t a, const rational_t *b);
 void mpq_mul_q(mpq_t dest, mpq_t a, const rational_t *b);
