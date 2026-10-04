@@ -283,7 +283,7 @@ static bool alignment_pivot(simplex_solver_t *const solver,
     return true;
   case VAR_BOUND_UNKNOWN:
     // If we are dealing with a free variable, just assign it the value from sol
-    assert(!has_any_bound(solver, v));
+    assert(!has_any_bound(solver, v) || xq_is_zero(sol->x + v));
     update_non_basic_var_value(solver, v, sol->x + v);
     simplex_clear_bound_flags(solver, v);
     assert(value_satisfies_bounds(solver, v));
@@ -375,6 +375,7 @@ import_external_solution(simplex_solver_t *const solver,
         // v is now non-basic and can be removed from the set
         // TODO: do we need to sync the infeasible vars here?
         sync_infeasible_vars(solver);
+        int_bvset_remove(&missing_nb_vars, v);
         n_missing_nb_vars--;
         performed_pivot = true;
         break;
