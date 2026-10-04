@@ -78,6 +78,15 @@ extern void cleanup_mpq_aux(void);
  */
 extern void mpq_init2(mpq_t q, unsigned long n);
 
+static inline void mpq_init_pair(mpq_t q1, mpq_t q2) {
+  mpq_init(q1);
+  mpq_init(q2);
+}
+
+static inline void mpq_clear_pair(mpq_t q1, mpq_t q2) {
+  mpq_clear(q1);
+  mpq_clear(q2);
+}
 
 /*
  * Add rational num/den to q.
