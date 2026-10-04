@@ -72,7 +72,7 @@ void init_and_copy_to_gmp(mpq_t dest, const rational_t *const src) {
   mpq_set_q(dest, src);
 }
 
-void mpq_q_sub(mpq_t dest, mpq_t a, const rational_t *const b) {
+void mpq_sub_q(mpq_t dest, mpq_t a, const rational_t *const b) {
   if (is_ratgmp(b)) {
     mpq_sub(dest, a, get_gmp(b));
   } else {
@@ -377,14 +377,11 @@ import_external_solution(simplex_solver_t *const solver,
 
       // Get the basic row
       if (alignment_pivot(solver, sol, v)) {
-        // TODO: do we need to sync the infeasible vars here?
-        sync_infeasible_vars(solver);
         // A pivot has been performed.
         // v is now non-basic and can be removed from the set
-        // int_heap_remove(&solver->infeasible_vars, v);
-
+        // TODO: do we need to sync the infeasible vars here?
+        sync_infeasible_vars(solver);
         n_missing_nb_vars--;
-        int_bvset_remove(&missing_nb_vars, v);
         performed_pivot = true;
         break;
       }
@@ -409,13 +406,6 @@ import_external_solution(simplex_solver_t *const solver,
 
     delete_int_heap(&infeasible_vars_check);
 #endif
-
-    for (uint32_t i = 0; i < solver->matrix.nrows; i++) {
-      const thvar_t x = matrix_basic_var(&solver->matrix, i);
-      if (!value_satisfies_bounds(solver, x)) {
-        int_heap_add(&solver->infeasible_vars, x);
-      }
-    }
 
     if (int_heap_is_empty(&solver->infeasible_vars)) {
       delete_int_bvset(&missing_nb_vars);
