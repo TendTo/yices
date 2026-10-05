@@ -778,6 +778,7 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
     qsx->sense[row_idx] = 'E';
 
     const row_t *const row = matrix_row(mat, r);
+    int n_non_zero = 0;
     for (uint32_t i = 0; i < row->size; i++) {
       const thvar_t v = row->data[i].c_idx;
       if (v < 0) // Ignore 0 coefficients (i.e., empty columns)
@@ -788,6 +789,7 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
         assert(qsx->rhs[row_idx] || rat_get_den(qsx->rhs[row_idx]) > 0);
         continue;
       }
+      n_non_zero++;
       col_idxs[col_idxs_idx++] = qsx->var_to_col[row->data[i].c_idx];
       rat_init(values[values_idx]);
       rat_set_q(values[values_idx++], &row->data[i].coeff);
@@ -803,11 +805,11 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
 
     // For each row, we set the number of non-zero coefficients
     // (i.e., the size of the row)
-    non_zero_per_row[row_idx] = (int)row->nelems;
+    non_zero_per_row[row_idx] = n_non_zero;
     row_idx++;
   }
 
-#if 0
+#if 0 && !defined(NDEBUG)
   printf("Strict-mode LP has %d/%d rows and %d columns\n", row_idx, mat->nrows,
          rat_QSget_colcount(prob));
   printf("Added %d rows to the strict-mode LP\n", row_idx);
@@ -1188,6 +1190,7 @@ static void add_rows_strict(simplex_solver_t *const solver,
     begin_row_idx[row_idx] = col_idxs_idx;
     qsx->sense[row_idx] = 'E';
 
+    int n_non_zero = 0;
     const row_t *const row = matrix_row(mat, r);
     for (uint32_t i = 0; i < row->size; i++) {
       const thvar_t v = row->data[i].c_idx;
@@ -1199,7 +1202,8 @@ static void add_rows_strict(simplex_solver_t *const solver,
         assert(qsx->rhs[row_idx] || rat_get_den(qsx->rhs[row_idx]) > 0);
         continue;
       }
-      col_idxs[col_idxs_idx++] = qsx->var_to_col[row->data[i].c_idx];
+      n_non_zero++;
+      col_idxs[col_idxs_idx++] = qsx->var_to_col[v];
       rat_init(values[values_idx]);
       rat_set_q(values[values_idx++], &row->data[i].coeff);
       assert(!rat_is_zero(values[values_idx - 1]));
@@ -1209,7 +1213,7 @@ static void add_rows_strict(simplex_solver_t *const solver,
 
     // For each row, we set the number of non-zero coefficients
     // (i.e., the size of the row)
-    non_zero_per_row[row_idx] = (int)row->nelems;
+    non_zero_per_row[row_idx] = n_non_zero;
     row_idx++;
   }
 
@@ -1652,9 +1656,9 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
     qsx_build_problem_epsilon(solver, &qsx);
   else
     qsx_build_problem_strict(solver, &qsx);
-#if 1 && !defined(NDEBUG)
+#if 0 && !defined(NDEBUG)
   static int i = 0;
-  rat_QSdump_prob(qsx.prob);
+  // rat_QSdump_prob(qsx.prob);
   fprintf(stderr, "Problem %d %s: n_cols = %d, n_rows = %d\n", i,
           __smt2_globals.epsilon_mode ? "epsilon" : "strict", qsx.n_cols,
           qsx.n_rows);
