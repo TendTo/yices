@@ -311,10 +311,6 @@ import_external_solution(simplex_solver_t *const solver,
     if (matrix_is_nonbasic_var(matrix, v) && int_bvset_member(new_nb, v)) {
       // TODO: should we violate the invariant that non-basic variables are at a
       // bound?
-      // printf("\n\n*** Updating %d to ", v);
-      // xq_print(stdout, sol->x + v);
-      // printf(" ***\n");
-      // print_simplex_vars_summary(stdout, solver);
       update_nb_value(solver, sol, v);
       assert(value_satisfies_bounds(solver, v));
     }
