@@ -332,9 +332,8 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   qsx->n_rows = 0;
 #if USE_MATRIX // Only estimate rows and cols if we are not using the matrix
   qsx->n_cols = (int)solver->matrix.ncolumns - 1; // Exclude the constant column
-  qsx->n_rows =
-      (int)solver->matrix.nrows +
-      (__smt2_globals.epsilon_mode ? 0 : num_strict_all_vars(solver));
+  qsx->n_rows = (int)solver->matrix.nrows +
+                (__smt2_globals.epsilon_mode ? 0 : num_strict_all_vars(solver));
 #else
   if (__smt2_globals.epsilon_mode) {
     qsx_estimate_n_cols_and_rows_epsilon(solver, qsx);
@@ -351,10 +350,7 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   // to collect the value of the strict var, if needed.
   // There is no need do add it anywhere else
   qsx->x = new_rat_array(qsx->n_cols + 1);
-  // We do not allocate the y array.
-  // Instead, we link it to the existing array in the LP problem,
-  // after we solve an instance
-  qsx->y = NULL;
+  qsx->y = new_rat_array(qsx->n_rows);
   qsx->range = new_rat_array(qsx->n_rows);
   qsx->rhs = new_rat_array(qsx->n_rows);
   qsx->sense = safe_malloc(qsx->n_rows * sizeof(char));
@@ -386,6 +382,7 @@ static void qsx_clear(qsx_t *const qsx) {
   safe_free(qsx->var_to_row);
   safe_free(qsx->sense);
   free_rat_array(qsx->x, qsx->n_cols + 1);
+  free_rat_array(qsx->y, qsx->n_rows);
   free_rat_array(qsx->range, qsx->n_rows);
   free_rat_array(qsx->rhs, qsx->n_rows);
 }
@@ -1094,12 +1091,28 @@ static void add_cols_strict(simplex_solver_t *const solver,
     rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
     rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
+#if 1 && !defined(NDEBUG)
+    char buf[64];
+    if (arith_var_is_int(&solver->vtbl, v)) {
+      sprintf(buf, "i!%d", v);
+    } else {
+      sprintf(buf, "z!%d", v);
+    }
+    // sprintf(buf, "x%d", rat_QSget_colcount(prob));
+#endif
+
     const int n_cols = rat_QSget_colcount(prob);
     qsx->col_to_var[n_cols] = v;
     qsx->var_to_col[v] = n_cols;
     rat_QSnew_col(prob, rat_zeroLpNum,
                   !has_strict_lb(solver, v) ? lb : rat_NINFTY,
-                  !has_strict_ub(solver, v) ? ub : rat_INFTY, NULL);
+                  !has_strict_ub(solver, v) ? ub : rat_INFTY,
+#if 1 && !defined(NDEBUG)
+                  buf
+#else
+                  NULL
+#endif
+    );
 
     // If the variable is not free, it is an auxiliary variable.
     // We will encode those as rows later.
@@ -1217,7 +1230,7 @@ static void add_rows_strict(simplex_solver_t *const solver,
     row_idx++;
   }
 
-#if 1 && !defined(NDEBUG)
+#if 0 && !defined(NDEBUG)
   printf("Strict-mode LP has %d rows and %d columns\n", qsx->n_rows,
          qsx->n_cols);
   printf("Added %d rows to the strict-mode LP\n", row_idx);
@@ -1532,15 +1545,17 @@ static void extract_solution_strict(simplex_solver_t *solver, qsx_t *qsx,
         rat_QSchange_bound(qsx->prob, strict_var_idx, 'U', rat_zeroLpNum);
     assert(res == 0);
 
-    rat_t delta;
+    rat_t delta, obj_lb, obj_ub;
     rat_init(delta);
+    rat_init_pair(obj_lb, obj_ub);
     rat_set_double(delta, __smt2_globals.delta);
 
-    res = QSdelta_solver_rat(qsx->prob, delta, qsx->x, NULL, &qsx->basis, NULL,
-                             PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
+    res = QSdelta_full_solver_rat(qsx->prob, delta, qsx->x, qsx->y, obj_lb,
+                                  obj_ub, &qsx->basis, PRIMAL_SIMPLEX,
+                                  &qsx->status, NULL, NULL, NULL);
     assert(res == 0);
-    qsx->y = qsx->prob->lp->pIpiz;
     rat_clear(delta);
+    rat_clear_pair(obj_lb, obj_ub);
 
     const external_simplex_status_t status = qsx_status_to_sol_status(qsx);
     if (status != EXTERNAL_SIMPLEX_FEASIBLE &&
@@ -1609,11 +1624,20 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   rat_init(delta);
   rat_set_double(delta, __smt2_globals.delta);
 
-  [[maybe_unused]] const int res =
-      QSdelta_solver_rat(*prob, delta, qsx->x, NULL, &qsx->basis, &precision,
-                         PRIMAL_SIMPLEX, &qsx->status, NULL, NULL);
-  assert(res == 0);
-  qsx->y = qsx->prob->lp->pIpiz;
+  if (__smt2_globals.epsilon_mode) {
+    [[maybe_unused]] const int res = QSdelta_solver_rat(
+        *prob, delta, qsx->x, qsx->y, &qsx->basis, &precision, PRIMAL_SIMPLEX,
+        &qsx->status, NULL, NULL);
+    assert(res == 0);
+  } else {
+    rat_t obj_lb, obj_ub;
+    rat_init_pair(obj_lb, obj_ub);
+    [[maybe_unused]] const int res = QSdelta_full_solver_rat(
+        qsx->prob, delta, qsx->x, qsx->y, obj_lb, obj_ub, &qsx->basis,
+        PRIMAL_SIMPLEX, &qsx->status, NULL, NULL, NULL);
+    assert(res == 0);
+    rat_clear_pair(obj_lb, obj_ub);
+  }
 
   // Update the statistics
   if (precision > solver->stats.max_precision)
@@ -1656,7 +1680,7 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
     qsx_build_problem_epsilon(solver, &qsx);
   else
     qsx_build_problem_strict(solver, &qsx);
-#if 0 && !defined(NDEBUG)
+#if 1 && !defined(NDEBUG)
   static int i = 0;
   // rat_QSdump_prob(qsx.prob);
   fprintf(stderr, "Problem %d %s: n_cols = %d, n_rows = %d\n", i,
