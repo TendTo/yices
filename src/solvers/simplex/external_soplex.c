@@ -1629,18 +1629,16 @@ static void spx_solve_lp(simplex_solver_t *const solver, spx_t *const spx,
   }
 
   const int refinements = SoPlex_numRefinements(prob);
-  if (refinements > solver->stats.iterative_refinements)
-    solver->stats.iterative_refinements = refinements;
+  simplex_update_stat_iterative_refinements(&solver->stats, refinements);
 
-  const unsigned int num_precision_boosts = SoPlex_numPrecisionBoosts(prob);
+  const int num_precision_boosts = SoPlex_numPrecisionBoosts(prob);
   const double precision_boosting_factor =
       SoPlex_getRealParam(prob, PRECISION_BOOSTING_FACTOR);
-  unsigned int precision = num_precision_boosts == 0 ? sizeof(double) * 8 : 167;
+  int precision = num_precision_boosts == 0 ? sizeof(double) * 8 : 167;
   for (int i = 1; i < num_precision_boosts; i++) {
-    precision = (unsigned int)(precision * precision_boosting_factor);
+    precision = (int)(precision * precision_boosting_factor);
   }
-  if (precision > solver->stats.max_precision)
-    solver->stats.max_precision = precision;
+  simplex_update_stat_max_precision(&solver->stats, precision);
 
   if (__smt2_globals.delta >= 0) {
     const double max_bound_violation =

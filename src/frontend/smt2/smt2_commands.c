@@ -1670,6 +1670,24 @@ static void print_string_and_float(int fd, print_buffer_t *b, const char *s, dou
   (void) write_buffer(fd, b);
 }
 
+static void print_string_and_stat_map(int fd, print_buffer_t *b, const char *s,
+                                     const int_hmap_pair_t *map) {
+  reset_print_buffer(b);
+  print_buffer_append_string(b, s);
+  print_buffer_append_string(b, " {");
+  for (int i = 0; i < 64; i++) {
+    if (map[i].val != 0) {
+      print_buffer_append_char(b, ' ');
+      print_buffer_append_uint32(b, map[i].key);
+      print_buffer_append_string(b, " : ");
+      print_buffer_append_uint32(b, map[i].val);
+      print_buffer_append_string(b, " , ");
+    }
+  }
+  print_buffer_append_string(b, "}\n");
+  (void) write_buffer(fd, b);
+}
+
 static void print_char_and_newline(int fd, print_buffer_t *b, char c) {
   reset_print_buffer(b);
   print_buffer_append_char(b, c);
@@ -1734,7 +1752,8 @@ static void show_simplex_stats(int fd, print_buffer_t *b, simplex_solver_t *solv
   print_string_and_float(fd, b, " :simplex-initial-delta ", simplex_initial_delta(solver));
   print_string_and_uint32(fd, b, " :simplex-epsilon-mode ", simplex_epsilon_mode(solver));
   print_string_and_float(fd, b, " :simplex-max-delta ", simplex_max_delta(solver));
-  print_string_and_uint32(fd, b, " :simplex-max-precision ", simplex_max_precision(solver));
+  print_string_and_stat_map(fd, b, " :simplex-max-precision ", solver->stats.max_precision);
+  print_string_and_uint32(fd, b, " :simplex-pivot-threshold ", __smt2_globals.pivot_threshold);
   print_string_and_uint32(fd, b, " :simplex-delta-calls ", simplex_delta_calls(solver));
   print_string_and_uint32(fd, b, " :simplex-external-calls ", simplex_external_calls(solver));
   print_string_and_uint32(fd, b, " :simplex-external-extended-search-count ", simplex_external_extended_search_count(solver));
@@ -1744,11 +1763,14 @@ static void show_simplex_stats(int fd, print_buffer_t *b, simplex_solver_t *solv
   print_string_and_uint32(fd, b, " :simplex-external-infeasible-correct ", simplex_external_infeasible_correct(solver));
   print_string_and_uint32(fd, b, " :simplex-external-infeasible-incorrect ", simplex_external_infeasible_incorrect(solver));
   print_string_and_uint32(fd, b, " :simplex-external-other ", simplex_external_other(solver));
-  print_string_and_uint32(fd, b, " :simplex-adjustment-pivots ", simplex_adjustment_pivots(solver));
+  print_string_and_uint32(fd, b, " :simplex-external-lp-max-nnz ", solver->stats.external_lp_max_nnz);
+  print_string_and_uint32(fd, b, " :simplex-adjustment-pivots-feasible ", solver->stats.adjustment_pivots_feasible);
+  print_string_and_uint32(fd, b, " :simplex-adjustment-pivots-infeasible ", solver->stats.adjustment_pivots_infeasible);
+  print_string_and_uint32(fd, b, " :simplex-adjustment-pivots ", solver->stats.adjustment_pivots_feasible + solver->stats.adjustment_pivots_infeasible);
   print_string_and_uint32(fd, b, " :simplex-external-lp-solver ", simplex_external_lp_solver(solver));
   print_string_and_float(fd, b, " :simplex-external-lp-setup-time ", simplex_external_lp_setup_time(solver));
   print_string_and_float(fd, b, " :simplex-external-lp-run-time ", simplex_external_lp_run_time(solver));
-  print_string_and_uint32(fd, b, " :simplex-iterative-refinements ", simplex_iterative_refinements(solver));
+  print_string_and_stat_map(fd, b, " :simplex-iterative-refinements ", solver->stats.iterative_refinements);
   print_string_and_uint32(fd, b, " :simplex-conflicts ", simplex_num_conflicts(solver));
   print_string_and_uint32(fd, b, " :simplex-interface-lemmas ", simplex_num_interface_lemmas(solver));
   if (simplex_num_make_integer_feasible(solver) > 0 ||

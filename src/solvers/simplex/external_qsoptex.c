@@ -1634,14 +1634,13 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
     rat_init_pair(obj_lb, obj_ub);
     [[maybe_unused]] const int res = QSdelta_full_solver_rat(
         qsx->prob, delta, qsx->x, qsx->y, obj_lb, obj_ub, &qsx->basis,
-        PRIMAL_SIMPLEX, &qsx->status, NULL, NULL, NULL);
+        PRIMAL_SIMPLEX, &qsx->status, &precision, NULL, NULL);
     assert(res == 0);
     rat_clear_pair(obj_lb, obj_ub);
   }
 
   // Update the statistics
-  if (precision > solver->stats.max_precision)
-    solver->stats.max_precision = precision;
+  simplex_update_stat_max_precision(&solver->stats, (int) precision);
   if (should_update_max_delta(qsx)) {
     const double new_delta = rat_to_d(delta);
     if (new_delta > solver->stats.max_delta)

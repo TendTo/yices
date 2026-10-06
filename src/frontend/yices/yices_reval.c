@@ -2157,7 +2157,13 @@ static void show_simplex_stats(simplex_stats_t *stat) {
   printf(" initial delta           : %.3f\n", stat->initial_delta);
   printf(" epsilon mode            : %"PRIu32"\n", stat->epsilon_mode);
   printf(" max delta               : %.3f\n", stat->max_delta);
-  printf(" max precision           : %"PRIu32"\n", stat->max_precision);
+  printf(" max precision           : {");
+  for (int i = 0; i < sizeof(stat->max_precision) / sizeof(stat->max_precision[0]); i++) {
+    if (stat->max_precision[i].val != 0) {
+      printf(" %"PRIu32" : %"PRIu32", ", stat->max_precision[i].key, stat->max_precision[i].val);
+    }
+  }
+  printf("}\n");
   printf(" delta calls             : %"PRIu32"\n", stat->delta_calls);
   printf(" external solver calls   : %"PRIu32"\n", stat->external_calls);
   printf(" external extnd search   : %"PRIu32"\n", stat->external_extended_search_count);
@@ -2167,10 +2173,18 @@ static void show_simplex_stats(simplex_stats_t *stat) {
   printf(" external infeas. correct: %"PRIu32"\n", stat->external_infeasible_correct);
   printf(" external infeas. incorr.: %"PRIu32"\n", stat->external_infeasible_incorrect);
   printf(" external other          : %"PRIu32"\n", stat->external_other);
-  printf(" adjustment pivots       : %"PRIu32"\n", stat->adjustment_pivots);
+  printf(" external lp max nnz     : %"PRIu32"\n", stat->external_lp_max_nnz);
+  printf(" adj. pivots feas.       : %"PRIu32"\n", stat->adjustment_pivots_feasible);
+  printf(" adj. pivots infeas.     : %"PRIu32"\n", stat->adjustment_pivots_infeasible);
   printf(" external lp setup time  : %.3f\n", stat->external_lp_setup_time);
   printf(" external lp run time    : %.3f\n", stat->external_lp_run_time);
-  printf(" iterative refinements   : %"PRIu32"\n", stat->iterative_refinements);
+  printf(" iterative refinements   : {");
+  for (int i = 0; i < sizeof(stat->iterative_refinements) / sizeof(stat->iterative_refinements[0]); i++) {
+    if (stat->iterative_refinements[i].val != 0) {
+      printf(" %"PRIu32" : %"PRIu32", ", stat->iterative_refinements[i].key, stat->iterative_refinements[i].val);
+    }
+  }
+  printf("}\n");
   printf(" bland-rule activations  : %"PRIu32"\n", stat->num_blands);
   printf(" simple lemmas           : %"PRIu32"\n", stat->num_binary_lemmas);
   printf(" prop. to core           : %"PRIu32"\n", stat->num_props);

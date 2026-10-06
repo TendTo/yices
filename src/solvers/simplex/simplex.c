@@ -634,7 +634,7 @@ static void init_simplex_statistics(simplex_stats_t *stat) {
   stat->initial_delta = __smt2_globals.delta;
   stat->epsilon_mode = __smt2_globals.epsilon_mode;
   stat->max_delta = 0.0;
-  stat->max_precision = 0;
+  memset(stat->max_precision, 0, sizeof(stat->max_precision));
   stat->delta_calls = 0;
   stat->external_calls = 0;
   stat->external_extended_search_count = 0;
@@ -644,11 +644,13 @@ static void init_simplex_statistics(simplex_stats_t *stat) {
   stat->external_infeasible_correct = 0;
   stat->external_infeasible_incorrect = 0;
   stat->external_other = 0;
-  stat->adjustment_pivots = 0;
+  stat->external_lp_max_nnz = 0;
+  stat->adjustment_pivots_feasible = 0;
+  stat->adjustment_pivots_infeasible = 0;
   stat->external_lp_solver = __smt2_globals.external_lp_solver;
   stat->external_lp_setup_time = 0.0;
   stat->external_lp_run_time = 0.0;
-  stat->iterative_refinements = 0;
+  memset(stat->iterative_refinements, 0, sizeof(stat->iterative_refinements));
 
   stat->num_make_intfeasible = 0;
   stat->num_bound_conflicts = 0;
@@ -4096,6 +4098,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   uint32_t repeats, loops, bthreshold;
   bool feasible;
   bool invoked_external_solver;
+  uint32_t adjustment_pivots;
   external_simplex_status_t status;
   uint32_t pivots;
 
@@ -4117,6 +4120,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   loops = 0;
   pivots = 0;
   invoked_external_solver = false;
+  adjustment_pivots = 0;
   status = EXTERNAL_SIMPLEX_UNKNOWN;
 
   /*
@@ -4178,7 +4182,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
         update_to_lower_bound(solver, x);
         solver->stats.num_pivots ++;
         pivots++;
-        solver->stats.adjustment_pivots += invoked_external_solver ? 1 : 0;
+        adjustment_pivots += invoked_external_solver ? 1 : 0;
       }
 
     } else if (variable_above_upper_bound(solver, x)) {
@@ -4197,7 +4201,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
         update_to_upper_bound(solver, x);
         solver->stats.num_pivots ++;
         pivots++;
-        solver->stats.adjustment_pivots += invoked_external_solver ? 1 : 0;
+        adjustment_pivots += invoked_external_solver ? 1 : 0;
       }
     }
 
@@ -4244,6 +4248,11 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
 #endif
 
   if (invoked_external_solver) {
+    if (feasible) {
+      solver->stats.adjustment_pivots_feasible += adjustment_pivots;
+    } else {
+      solver->stats.adjustment_pivots_infeasible += adjustment_pivots;
+    }
     switch (status) {
     case EXTERNAL_SIMPLEX_EXHAUSTED:
       solver->stats.external_exhausted++;
