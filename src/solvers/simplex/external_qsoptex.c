@@ -35,6 +35,7 @@ typedef struct {
 
   int32_t n_cols; ///< Number of estimated LP columns
   int32_t n_rows; ///< Number of estimated LP rows
+  uint32_t n_nz;  ///< Number of non-zero coefficients in the LP
 
   rat_t *rhs;    ///< Right-hand side of the constraints
   rat_t *range;  ///< Range of the constraints
@@ -334,12 +335,14 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   qsx->n_cols = (int)solver->matrix.ncolumns - 1; // Exclude the constant column
   qsx->n_rows = (int)solver->matrix.nrows +
                 (__smt2_globals.epsilon_mode ? 0 : num_strict_all_vars(solver));
+  qsx->n_nz = matrix_get_n_nz(&solver->matrix);
 #else
   if (__smt2_globals.epsilon_mode) {
     qsx_estimate_n_cols_and_rows_epsilon(solver, qsx);
   } else {
     qsx_estimate_n_cols_and_rows_strict(solver, qsx);
   }
+  static_assert(false, "Need a way to estimate nnz without the matrix");
 #endif
 
   qsx->col_to_var = safe_malloc(qsx->n_cols * sizeof(thvar_t));
@@ -755,14 +758,10 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   char **row_names = safe_malloc(sizeof(char *) * qsx->n_rows);
 #endif
 
-  int non_zero_per_row[mat->nrows];
-  int begin_row_idx[mat->nrows];
-  // TODO: it may be worth checking the number
-  //  of non-zero elements in the matrix and allocating only that much
-  int *col_idxs =
-      safe_malloc(rat_QSget_colcount(prob) * mat->nrows * sizeof(int));
-  rat_t *values =
-      safe_malloc(rat_QSget_colcount(prob) * mat->nrows * sizeof(rat_t));
+  int *non_zero_per_row = safe_malloc(mat->nrows * sizeof(int));
+  int *begin_row_idx = safe_malloc(mat->nrows * sizeof(int));
+  int *col_idxs = safe_malloc(qsx->n_nz * sizeof(int));
+  rat_t *values = safe_malloc(qsx->n_nz * sizeof(rat_t));
 
   int row_idx = 0, col_idxs_idx = 0, values_idx = 0;
 
@@ -848,9 +847,13 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   }
 #endif
 
+  assert(col_idxs_idx <= qsx->n_nz);
+  assert(values_idx <= qsx->n_nz);
   rat_array_clear(values, values_idx);
   safe_free(col_idxs);
   safe_free(values);
+  safe_free(non_zero_per_row);
+  safe_free(begin_row_idx);
 }
 #else
 
@@ -1131,11 +1134,14 @@ static void add_rows_strict(simplex_solver_t *const solver,
   assert(qsx->n_rows > 0);
   rat_QSprob prob = qsx->prob;
   matrix_t *const mat = &solver->matrix;
-  int non_zero_per_row[qsx->n_rows];
-  int begin_row_idx[qsx->n_rows];
+  int *non_zero_per_row = safe_malloc(qsx->n_rows * sizeof(int));
+  int *begin_row_idx = safe_malloc(qsx->n_rows * sizeof(int));
   const int strict_var_idx = qsx->n_cols;
-  int *const col_idxs = safe_malloc(sizeof(int) * qsx->n_cols * qsx->n_rows);
-  rat_t *const values = safe_malloc(sizeof(rat_t) * qsx->n_cols * qsx->n_rows);
+  // Compute the number of non-zero coefficients in the new LP problem,
+  // taking into account the extra rows added for strict bounds.
+  const uint32_t n_nz = qsx->n_nz + (qsx->n_rows - mat->nrows) * 2;
+  int *const col_idxs = safe_malloc(n_nz * sizeof(int));
+  rat_t *const values = safe_malloc(n_nz * sizeof(rat_t));
   int col_idxs_idx = 0;
   int values_idx = 0;
   int row_idx = 0;
@@ -1247,10 +1253,14 @@ static void add_rows_strict(simplex_solver_t *const solver,
                         col_idxs, values, qsx->rhs, qsx->sense, qsx->range,
                         NULL);
 
+  assert(col_idxs_idx <= n_nz);
+  assert(values_idx <= n_nz);
   assert(row_idx == qsx->n_rows && row_idx == rat_QSget_rowcount(prob));
   rat_array_clear(values, values_idx);
   safe_free(col_idxs);
   safe_free(values);
+  safe_free(non_zero_per_row);
+  safe_free(begin_row_idx);
 }
 
 #else
@@ -1640,7 +1650,7 @@ static void qsx_solve_lp(simplex_solver_t *const solver, qsx_t *const qsx,
   }
 
   // Update the statistics
-  simplex_update_stat_max_precision(&solver->stats, (int) precision);
+  simplex_update_stat_max_precision(&solver->stats, (int)precision);
   if (should_update_max_delta(qsx)) {
     const double new_delta = rat_to_d(delta);
     if (new_delta > solver->stats.max_delta)
@@ -1667,6 +1677,8 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   qsx_t qsx;
   qsx_init(&qsx);
   qsx_init_vars(solver, &qsx);
+  if (qsx.n_nz > solver->stats.external_lp_max_nnz)
+    solver->stats.external_lp_max_nnz = qsx.n_nz;
 
   // Edge case: empty problem, feasible by definition
   if (qsx.n_cols == 0 || qsx.n_rows == 0) {

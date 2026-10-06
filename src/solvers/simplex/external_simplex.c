@@ -460,6 +460,17 @@ rational_t *get_ub_main(simplex_solver_t *const solver, const thvar_t x) {
              : NULL;
 }
 
+uint32_t matrix_get_n_nz(const matrix_t *const matrix) {
+  uint32_t nnz = 0;
+  for (uint32_t i = 0; i < matrix->nrows; i++) {
+    const row_t *const row = matrix->row[i];
+    if (row) {
+      nnz += row->nelems;
+    }
+  }
+  return nnz;
+}
+
 void mpq_vector_clear(mpq_t v[], const int n) {
   for (int i = 0; i < n; i++) {
     mpq_clear(v[i]);

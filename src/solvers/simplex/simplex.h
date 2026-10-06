@@ -476,10 +476,6 @@ static inline double simplex_max_delta(simplex_solver_t *solver) {
   return solver->stats.max_delta;
 }
 
-static inline uint32_t simplex_max_precision(simplex_solver_t *solver) {
-  return solver->stats.max_precision;
-}
-
 static inline uint32_t simplex_delta_calls(simplex_solver_t *solver) {
   return solver->stats.delta_calls;
 }
@@ -516,10 +512,6 @@ static inline uint32_t simplex_external_other(simplex_solver_t *solver) {
   return solver->stats.external_other;
 }
 
-static inline uint32_t simplex_adjustment_pivots(simplex_solver_t *solver) {
-  return solver->stats.adjustment_pivots;
-}
-
 static inline uint32_t simplex_external_lp_solver(simplex_solver_t *solver) {
   return solver->stats.external_lp_solver;
 }
@@ -530,10 +522,6 @@ static inline uint32_t simplex_external_lp_setup_time(simplex_solver_t *solver) 
 
 static inline double simplex_external_lp_run_time(simplex_solver_t *solver) {
   return solver->stats.external_lp_run_time;
-}
-
-static inline double simplex_iterative_refinements(simplex_solver_t *solver) {
-  return solver->stats.iterative_refinements;
 }
 
 /*

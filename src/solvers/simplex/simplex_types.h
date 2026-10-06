@@ -643,7 +643,7 @@ typedef struct simplex_stats_s {
   double initial_delta;
   uint32_t epsilon_mode;
   double max_delta;
-  uint32_t max_precision;
+  int_hmap_pair_t max_precision[64];
   uint32_t delta_calls;
   uint32_t external_calls;
   uint32_t external_extended_search_count;
@@ -653,11 +653,13 @@ typedef struct simplex_stats_s {
   uint32_t external_infeasible_correct;
   uint32_t external_infeasible_incorrect;
   uint32_t external_other;
-  uint32_t adjustment_pivots;
+  uint32_t external_lp_max_nnz;
+  uint32_t adjustment_pivots_infeasible;
+  uint32_t adjustment_pivots_feasible;
   uint32_t external_lp_solver;
   double external_lp_setup_time;
   double external_lp_run_time;
-  uint32_t iterative_refinements;
+  int_hmap_pair_t iterative_refinements[64];
 
   // stats on integer arithmetic solver
   uint32_t num_make_intfeasible;        // calls to make_integer_feasible
@@ -678,6 +680,27 @@ typedef struct simplex_stats_s {
 } simplex_stats_t;
 
 
+static inline void simplex_update_stat_map(int_hmap_pair_t *map, const uint32_t n, const int32_t key) {
+  for (uint32_t i=0; i<n; i++) {
+    if (map[i].key == key) {
+      map[i].val++;
+      return;
+    }
+    if (map[i].key == 0) {
+      map[i].key = key;
+      map[i].val = 1;
+      return;
+    }
+  }
+}
+
+static inline void simplex_update_stat_max_precision(simplex_stats_t *stats, const int32_t key) {
+  simplex_update_stat_map(stats->max_precision, sizeof(stats->max_precision)/sizeof(stats->max_precision[0]), key);
+}
+
+static inline void simplex_update_stat_iterative_refinements(simplex_stats_t *stats, const int32_t key) {
+  simplex_update_stat_map(stats->iterative_refinements, sizeof(stats->iterative_refinements)/sizeof(stats->iterative_refinements[0]), key);
+}
 
 
 

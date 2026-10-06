@@ -112,7 +112,7 @@ static inline uint32_t int_heap_nelems(int_heap_t *heap) {
 /*
  * Check whether x is in the heap
  */
-static inline bool int_heap_member(int_heap_t *heap, int32_t x) {
+static inline bool int_heap_member(const int_heap_t *heap, int32_t x) {
   assert(0 <= x);
   return x < heap->idx_size && heap->idx[x] >= 0;
 }

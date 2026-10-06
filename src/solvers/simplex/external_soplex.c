@@ -1676,6 +1676,9 @@ void spx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   spx_t spx;
   spx_init(&spx);
   spx_init_vars(solver, &spx);
+  const uint32_t n_nz = matrix_get_n_nz(&solver->matrix);
+  if (n_nz > solver->stats.external_lp_max_nnz)
+    solver->stats.external_lp_max_nnz = n_nz;
 
   // Edge case: empty problem, feasible by definition
   if (spx.n_cols == 0 || spx.n_rows == 0) {
