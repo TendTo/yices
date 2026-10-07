@@ -686,7 +686,7 @@ static inline void simplex_update_stat_map(int_hmap_pair_t *map, const uint32_t 
       map[i].val++;
       return;
     }
-    if (map[i].key == 0) {
+    if (map[i].val == 0) {
       map[i].key = key;
       map[i].val = 1;
       return;
