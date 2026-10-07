@@ -107,36 +107,6 @@ static inline bool var_is_valid_strict_column(simplex_solver_t *const solver,
 external_simplex_status_t
 simplex_check_feasibility_external(simplex_solver_t *solver);
 
-/**
- * Obtain a pointer to a bound in terms of mpq_t.
- * The value returned depends on some parameters:
- * - If has_bound is false, the bound is either +infinity or -infinity,
- *   based on the is_lb parameter.
- *   Its value is a pointer to either mpq_INFTY or mpq_NINFTY.
- * - If has_bound is true, the bound is the value of val, possibly adjusted
- *   based on the is_strict parameter.
- *   Since val is a rational_t, it may be stored in a temporary mpq_t if it is
- *   not already a GMP rational. The used_temp parameter indicates whether a
- *   temporary allocation was used.
- * @param bound the value of bound,
- * including whether it is a lower or upper bound, and whether it is strict.
- * @param ninf a pointer to the negative infinity mpq_t.
- * Its value is external-lp-solver-dependent.
- * @param inf a pointer to the positive infinity mpq_t.
- * Its value is external-lp-solver-dependent.
- * @param[out] used_temp whether a temporary allocation was used.
- * If true, the caller is responsible for clearing the temporary mpq_t after
- * use.
- * @param[out] temp a temporary mpq_t.
- * It may be initialized and be pointed by the returned mpq_ptr.
- * If that happens, the caller is responsible for clearing it after use.
- * @return a pointer to the bound
- */
-void get_bound(const simplex_solver_t *solver, thvar_t v, bool is_lower_bound,
-               bound_type_t *bound);
-void get_bound_copy(const simplex_solver_t *solver, thvar_t v,
-                    bool is_lower_bound, bound_type_t *bound);
-
 external_import_status_t import_external_solution(simplex_solver_t *solver,
                                                   external_solution_t *sol);
 
