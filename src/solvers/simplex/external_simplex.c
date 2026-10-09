@@ -212,7 +212,7 @@ static bool alignment_pivot(simplex_solver_t *const solver,
   return false;
 }
 
-external_import_status_t
+static inline external_import_status_t
 import_external_solution(simplex_solver_t *const solver,
                          external_solution_t *const sol) {
   assert(solver);
@@ -454,7 +454,8 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
 
   const external_simplex_status_t status = solution.status;
   switch (status) {
-  case EXTERNAL_SIMPLEX_INFEASIBLE:
+  // TODO: UNFORTUNATELY, WE DO IT ONLY ON FEASIBLE
+  // case EXTERNAL_SIMPLEX_INFEASIBLE:
   case EXTERNAL_SIMPLEX_FEASIBLE:
     import_external_solution(solver, &solution);
     break;

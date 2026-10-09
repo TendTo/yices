@@ -107,9 +107,6 @@ static inline bool var_is_valid_strict_column(simplex_solver_t *const solver,
 external_simplex_status_t
 simplex_check_feasibility_external(simplex_solver_t *solver);
 
-external_import_status_t import_external_solution(simplex_solver_t *solver,
-                                                  external_solution_t *sol);
-
 // TODO: REMOVE ALL DEBUG PRINTS
 static inline void print_int_vector(const int32_t v[], const int n,
                                     const char *name) {

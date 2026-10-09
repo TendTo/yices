@@ -1707,8 +1707,8 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
 
   qsx_solve_lp(solver, &qsx, sol);
   // Only extract a solution if the external solver found a valid one
-  if (sol->status == EXTERNAL_SIMPLEX_FEASIBLE ||
-      sol->status == EXTERNAL_SIMPLEX_INFEASIBLE) {
+  // TODO: UNFORTUNATELY, WE DO IT ONLY ON FEASIBLE
+  if (sol->status == EXTERNAL_SIMPLEX_FEASIBLE) {
     if (__smt2_globals.epsilon_mode)
       extract_solution_epsilon(solver, &qsx, sol);
     else
