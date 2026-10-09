@@ -51,7 +51,7 @@ xrational_t *get_lb(simplex_solver_t *solver, thvar_t x);
 xrational_t *get_ub(simplex_solver_t *solver, thvar_t x);
 rational_t *get_lb_main(simplex_solver_t *solver, thvar_t x);
 rational_t *get_ub_main(simplex_solver_t *solver, thvar_t x);
-uint32_t matrix_get_n_nz(const matrix_t * matrix);
+uint32_t matrix_get_n_nz(const matrix_t *matrix);
 
 static inline int num_strict_all_vars(const simplex_solver_t *const solver) {
   int count = 0;

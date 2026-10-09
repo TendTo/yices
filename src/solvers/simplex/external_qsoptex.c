@@ -584,8 +584,7 @@ static void extract_col_value(simplex_solver_t *const solver, qsx_t *const qsx,
     sol->bounds[v] = VAR_BOUND_AT_UPPER;
     break;
   default:
-    printf("Unknown variable status for variable %d: %c\n", v, var_status);
-    exit(1);
+    abort();
   }
 }
 
@@ -671,8 +670,7 @@ static void extract_row_value(simplex_solver_t *const solver, qsx_t *const qsx,
     bounds[v] = VAR_BOUND_AT_UPPER;
     break;
   default:
-    printf("Unknown variable status for variable %d: %c\n", v, var_status);
-    exit(1);
+    abort();
   }
 }
 

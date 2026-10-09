@@ -932,8 +932,7 @@ static void extract_value(simplex_solver_t *const solver, spx_t *const spx,
     }
     break;
   default:
-    printf("Unknown variable status for variable %d: %c\n", v, var_status);
-    exit(1);
+    abort();
   }
 }
 
@@ -1651,10 +1650,6 @@ static void spx_solve_lp(simplex_solver_t *const solver, spx_t *const spx,
       solver->stats.max_delta = max_row_violation;
     if (max_bound_violation > 0 || max_row_violation > 0)
       solver->stats.delta_calls++;
-#if 0 && !defined(NDEBUG)
-    printf("Max bound violation: %g\n", max_bound_violation);
-    printf("Max row violation: %g\n", max_row_violation);
-#endif
   }
 
   solution->nvars = solver->vtbl.nvars;
