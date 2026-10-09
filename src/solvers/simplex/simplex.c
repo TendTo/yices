@@ -12774,7 +12774,7 @@ static void print_simplex(FILE *f, simplex_solver_t *solver) {
   fprintf(f, "\n==== Atoms ====\n");
   print_simplex_atoms(f, solver);
   fprintf(f, "\n==== Boolean gates ====\n");
-  print_gate_table(f, &solver->gate_manager->htbl);
+  print_gate_table(f, solver->gate_manager->htbl);
 }
 
 static void print_core(FILE *f, smt_core_t *core) {
