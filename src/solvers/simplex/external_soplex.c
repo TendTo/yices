@@ -13,6 +13,7 @@
 
 #define SOPLEX_WITH_GMP
 #define SOPLEX_WITH_BOOST
+#define SOPLEX_WITH_LIGHT_RAT
 
 #include "frontend/smt2/smt2_commands.h"
 #include "io/term_printer.h"
@@ -436,8 +437,8 @@ typedef struct {
   int32_t n_cols; ///< Number of estimated LP columns
   int32_t n_rows; ///< Number of estimated LP rows
 
-  mpq_t *x; ///< Temporary rational for storing the solution
-  mpq_t *y; ///< Temporary rational for storing the dual solution
+  spx_rat_t *x; ///< Temporary rational for storing the solution
+  spx_rat_t *y; ///< Temporary rational for storing the dual solution
 } spx_t;
 
 /** Maximum number of pivots before LP termination */
@@ -445,42 +446,102 @@ static const int pivot_threshold = 1000000;
 /** Global flag indicating whether the QSopt_ex runtime has been initialized */
 static bool spx_started = false;
 /** Global variable representing the rational number -1 for LP computations */
-static mpq_t mpq_oneLpNum;
-static mpq_t mpq_zeroLpNum;
-static mpq_t mpq_negoneLpNum;
-static mpq_t mpq_infLpNum;
-static mpq_t mpq_ninfLpNum;
+static spx_rat_t spx_rat_ONE;
+static spx_rat_t spx_rat_ZERO;
+static spx_rat_t spx_rat_NEGONE;
+static spx_rat_t spx_rat_INF;
+static spx_rat_t spx_rat_NINF;
 
 static void global_spx_start() {
   if (spx_started)
     return;
-  mpq_init(mpq_oneLpNum);
-  mpq_set_si(mpq_oneLpNum, 1, 1);
-  mpq_init(mpq_zeroLpNum);
-  mpq_set_si(mpq_zeroLpNum, 0, 1);
-  mpq_init(mpq_negoneLpNum);
-  mpq_set_si(mpq_negoneLpNum, -1, 1);
-  mpq_init(mpq_infLpNum);
-  mpq_set_d(mpq_infLpNum, SoPlex_infinity);
-  mpq_init(mpq_ninfLpNum);
-  mpq_set_d(mpq_ninfLpNum, -SoPlex_infinity);
+  spx_rat_init(spx_rat_ONE);
+  spx_rat_set_si(spx_rat_ONE, 1, 1);
+  spx_rat_init(spx_rat_ZERO);
+  spx_rat_set_si(spx_rat_ZERO, 0, 1);
+  spx_rat_init(spx_rat_NEGONE);
+  spx_rat_set_si(spx_rat_NEGONE, -1, 1);
+  spx_rat_init(spx_rat_INF);
+  spx_rat_set_d(spx_rat_INF, SoPlex_infinity);
+  spx_rat_init(spx_rat_NINF);
+  spx_rat_set_d(spx_rat_NINF, -SoPlex_infinity);
   spx_started = true;
 }
 
 void global_spx_clear() {
   if (!spx_started)
     return;
-  mpq_clear(mpq_oneLpNum);
-  mpq_clear(mpq_zeroLpNum);
-  mpq_clear(mpq_negoneLpNum);
-  mpq_clear(mpq_infLpNum);
-  mpq_clear(mpq_ninfLpNum);
+  spx_rat_clear(spx_rat_ONE);
+  spx_rat_clear(spx_rat_ZERO);
+  spx_rat_clear(spx_rat_NEGONE);
+  spx_rat_clear(spx_rat_INF);
+  spx_rat_clear(spx_rat_NINF);
   spx_started = false;
 }
 
-static mpq_ptr mpq_get_bound(const simplex_solver_t *const solver,
-                             const thvar_t v, const bool is_lower_bound,
-                             mpq_t bound) {
+static void spx_rat_init_pair(spx_rat_t rat1, spx_rat_t rat2) {
+  spx_rat_init(rat1);
+  spx_rat_init(rat2);
+}
+
+static void spx_rat_clear_pair(spx_rat_t rat1, spx_rat_t rat2) {
+  spx_rat_clear(rat1);
+  spx_rat_clear(rat2);
+}
+
+static inline void rat_set_q(spx_rat_t rat, const rational_t *const q) {
+  if (is_rat32(q)) {
+    spx_rat_set_si(rat, get_num(q), get_den(q));
+  } else {
+    spx_rat_set_gmp(rat, get_gmp(q));
+  }
+}
+
+static inline void q_set_rat(rational_t *const q, const spx_rat_t rat) {
+  if (spx_rat_is_infinity(rat)) {
+    q_set_double(q, SoPlex_infinity);
+  } else if (spx_rat_is_ninfinity(rat)) {
+    q_set_double(q, -SoPlex_infinity);
+  } else if (spx_rat_is_rat32(rat)) {
+    q_set_int32(q, spx_rat_get_num(rat), spx_rat_get_den(rat));
+  } else {
+    q_set_mpq(q, spx_rat_get_gmp(rat));
+  }
+}
+
+static inline void xq_set_rat(xrational_t *r, const spx_rat_t rat) {
+  q_set_rat(&r->main, rat);
+  q_clear(&r->delta);
+}
+
+static inline bool is_strict_var_zero(spx_rat_t x) {
+  return __smt2_globals.delta < 0 && !__smt2_globals.epsilon_mode &&
+         spx_rat_is_zero(x);
+}
+
+static inline void rat_sub_q(spx_rat_t rat, const rational_t *q) {
+  if (is_rat32(q)) {
+    spx_rat_sub_si(rat, get_num(q), get_den(q));
+  } else if (spx_rat_is_gmp(rat)) {
+    mpq_sub(spx_rat_get_gmp(rat), spx_rat_get_gmp(rat), get_gmp(q));
+  } else {
+    spx_rat_t temp;
+    spx_rat_init(temp);
+    spx_rat_set_gmp(temp, get_gmp(q));
+    spx_rat_sub(rat, temp);
+    spx_rat_clear(temp);
+  }
+}
+
+static inline void rat_vector_clear(spx_rat_t *v, const int n) {
+  for (int i = 0; i < n; i++) {
+    spx_rat_clear(v[i]);
+  }
+}
+
+static spx_lightrat_u *mpq_get_bound(const simplex_solver_t *const solver,
+                                     const thvar_t v, const bool is_lower_bound,
+                                     spx_rat_t bound) {
   const int32_t bound_idx = is_lower_bound ? solver->vtbl.lower_index[v]
                                            : solver->vtbl.upper_index[v];
   xrational_t *const bounds = solver->bstack.bound;
@@ -488,7 +549,7 @@ static mpq_ptr mpq_get_bound(const simplex_solver_t *const solver,
 
   const bool is_finite = bound_idx > -1;
   if (!is_finite)
-    return is_lower_bound ? mpq_ninfLpNum : mpq_infLpNum;
+    return is_lower_bound ? spx_rat_NINF : spx_rat_INF;
 
   const bool is_strict =
       __smt2_globals.delta < 0 &&
@@ -496,14 +557,14 @@ static mpq_ptr mpq_get_bound(const simplex_solver_t *const solver,
 
   assert(bound_idx >= 0 && bound_idx < solver->bstack.size);
   const rational_t *val = &bounds[bound_idx].main;
-  mpq_set_q(bound, val);
+  rat_set_q(bound, val);
 
   if (__smt2_globals.epsilon_mode && is_strict) {
     // Adjust the bounds with epsilon
     if (is_lower_bound) {
-      mpq_add_si(bound, epsilon_num, epsilon_den);
+      spx_rat_add_si(bound, epsilon_num, epsilon_den);
     } else {
-      mpq_sub_si(bound, epsilon_num, epsilon_den);
+      spx_rat_sub_si(bound, epsilon_num, epsilon_den);
     }
   }
   return bound;
@@ -518,11 +579,6 @@ static mpq_ptr mpq_get_bound(const simplex_solver_t *const solver,
  */
 static bool var_in_columns(const spx_t *const spx, const thvar_t v) {
   return spx->var_to_col[v] != -1;
-}
-
-static bool is_strict_var_zero(mpq_t x) {
-  return __smt2_globals.delta < 0 && !__smt2_globals.epsilon_mode &&
-         mpq_is_zero(x);
 }
 
 /**
@@ -604,18 +660,18 @@ static void spx_estimate_n_cols_and_rows_epsilon(simplex_solver_t *const solver,
   }
 }
 
-static void allocate_and_init(mpq_t **array, const size_t size) {
+static void allocate_and_init(spx_rat_t **array, const size_t size) {
   assert(*array == NULL);
-  *array = safe_malloc(size * sizeof(mpq_t));
+  *array = safe_malloc(size * sizeof(spx_rat_t));
   for (size_t i = 0; i < size; i++) {
-    mpq_init((*array)[i]);
+    spx_rat_init((*array)[i]);
   }
 }
 
-static void clear_and_free(mpq_t **array, const size_t size) {
+static void clear_and_free(spx_rat_t **array, const size_t size) {
   if (*array) {
     for (size_t i = 0; i < size; i++) {
-      mpq_clear((*array)[i]);
+      spx_rat_clear((*array)[i]);
     }
     free(*array);
     *array = NULL;
@@ -721,21 +777,21 @@ static void spx_clear(spx_t *const spx) {
 
 typedef struct row_data_s {
   int *col_idxs;
-  mpq_t *values;
-  mpq_t lb;
-  mpq_t ub;
+  spx_rat_t *values;
+  spx_rat_t lb;
+  spx_rat_t ub;
 } row_data_t;
 
 typedef struct row_accumulator_s {
-  mpq_t *values;
+  spx_rat_t *values;
   int *values_idxs;
   int n_values;
 } row_accumulator_t;
 
 static void row_accumulator_init(row_accumulator_t *const accumulator,
                                  int *const values_idxs, const int n_cols) {
-  accumulator->values = safe_malloc(n_cols * sizeof(mpq_t));
-  memset(accumulator->values, 0, n_cols * sizeof(mpq_t));
+  accumulator->values = safe_malloc(n_cols * sizeof(spx_rat_t));
+  memset(accumulator->values, 0, n_cols * sizeof(spx_rat_t));
   accumulator->values_idxs = values_idxs;
   accumulator->n_values = 0;
 }
@@ -744,7 +800,7 @@ static void row_accumulator_clear(row_accumulator_t *const accumulator,
                                   const bool clear_mpqs) {
   if (clear_mpqs) {
     for (int i = 0; i < accumulator->n_values; i++) {
-      mpq_clear(accumulator->values[accumulator->values_idxs[i]]);
+      spx_rat_clear(accumulator->values[accumulator->values_idxs[i]]);
     }
   }
   safe_free(accumulator->values);
@@ -754,12 +810,12 @@ static void row_accumulator_clear(row_accumulator_t *const accumulator,
 
 static void row_accumulator_add_mpq(row_accumulator_t *const accumulator,
                                     const int col_idx, const mpq_t value) {
-  if (accumulator->values[col_idx]->_mp_num._mp_d == NULL) {
-    mpq_init(accumulator->values[col_idx]);
-    mpq_set(accumulator->values[col_idx], value);
+  if (spx_rat_is_uninitialized(accumulator->values[col_idx])) {
+    spx_rat_init(accumulator->values[col_idx]);
+    spx_rat_set_gmp(accumulator->values[col_idx], value);
     accumulator->values_idxs[accumulator->n_values++] = col_idx;
   } else {
-    mpq_add(accumulator->values[col_idx], accumulator->values[col_idx], value);
+    spx_rat_add_gmp(accumulator->values[col_idx], value);
   }
 }
 
@@ -768,12 +824,14 @@ static void row_accumulator_add_q(row_accumulator_t *const accumulator,
   if (is_ratgmp(value)) {
     row_accumulator_add_mpq(accumulator, col_idx, get_gmp(value));
   } else {
-    if (accumulator->values[col_idx]->_mp_num._mp_d == NULL) {
-      mpq_init(accumulator->values[col_idx]);
-      mpq_set_si(accumulator->values[col_idx], get_num(value), get_den(value));
+    if (spx_rat_is_uninitialized(accumulator->values[col_idx])) {
+      spx_rat_init(accumulator->values[col_idx]);
+      spx_rat_set_si(accumulator->values[col_idx], get_num(value),
+                     get_den(value));
       accumulator->values_idxs[accumulator->n_values++] = col_idx;
     } else {
-      mpq_add_si(accumulator->values[col_idx], get_num(value), get_den(value));
+      spx_rat_add_si(accumulator->values[col_idx], get_num(value),
+                     get_den(value));
     }
   }
 }
@@ -819,10 +877,10 @@ static void monomials_to_row(simplex_solver_t *const solver,
       // Use the constant to update the right-hand side of the row
       assert(p->nterms > 1); // Constant with only one term are ignored
       if (has_lb(solver, v)) {
-        mpq_sub_q(row_data->lb, row_data->lb, coeff);
+        rat_sub_q(row_data->lb, coeff);
       }
       if (has_ub(solver, v)) {
-        mpq_sub_q(row_data->ub, row_data->ub, coeff);
+        rat_sub_q(row_data->ub, coeff);
       }
     } else if (var_in_columns(spx, x)) {
       assert(var_is_valid_column(solver, x));
@@ -849,10 +907,10 @@ static int polynomial_to_row(simplex_solver_t *const solver,
 
   for (int i = 0; i < num_non_zeros; i++) {
     const int col_idx = accumulator.values_idxs[i];
-    mpq_set(row_data->values[i], accumulator.values[col_idx]);
+    spx_rat_set(row_data->values[i], accumulator.values[col_idx]);
   }
 
-  // We do not need to clear the mpq_t values in the accumulator
+  // We do not need to clear the spx_rat_t values in the accumulator
   // because they have been assigned to the row_data values array,
   // which will be cleared later.
   row_accumulator_clear(&accumulator, true);
@@ -873,7 +931,7 @@ static int polynomial_to_row(simplex_solver_t *const solver,
  */
 static void extract_value(simplex_solver_t *const solver, spx_t *const spx,
                           external_solution_t *const sol, const int i,
-                          const mpq_t *const vals) {
+                          const spx_rat_t *const vals) {
   xrational_t *const x = sol->x;
   const bool is_col = vals == spx->x;
   const thvar_t v = is_col ? spx->col_to_var[i] : spx->row_to_var[i];
@@ -892,17 +950,17 @@ static void extract_value(simplex_solver_t *const solver, spx_t *const spx,
   case UNDEFINED: // Shared with basic
     // Start by setting the current basic result
     if (vals) {
-      xq_set_mpq_prenormalize(x + v, vals[i]);
+      xq_set_rat(x + v, vals[i]);
     } else {
-      mpq_t activity;
-      mpq_init(activity);
+      spx_rat_t activity;
+      spx_rat_init(activity);
       if (is_col) {
         SoPlex_getColActivityRational_mpq(spx->prob, i, activity);
       } else {
         SoPlex_getRowActivityRational_mpq(spx->prob, i, activity);
       }
-      xq_set_mpq_prenormalize(x + v, activity);
-      mpq_clear(activity);
+      xq_set_rat(x + v, activity);
+      spx_rat_clear(activity);
     }
     // Ensure the result is within the bounds of the variable, if any
     if (is_below_or_eq_lb(solver, v, x + v)) {
@@ -923,7 +981,7 @@ static void extract_value(simplex_solver_t *const solver, spx_t *const spx,
     sol->bounds[v] = VAR_BOUND_AT_UPPER;
     break;
   case ZERO:
-    xq_set_mpq_prenormalize(x + v, mpq_zeroLpNum);
+    xq_set_rat(x + v, spx_rat_ZERO);
     assert(xq_is_zero(x + v));
     if (is_below_or_eq_lb(solver, v, x + v)) {
       sol->bounds[v] = VAR_BOUND_AT_LOWER;
@@ -937,6 +995,37 @@ static void extract_value(simplex_solver_t *const solver, spx_t *const spx,
 }
 
 #pragma region Epsilon mode
+
+#define GUESS_DIR 1
+#if GUESS_DIR
+static const spx_rat_t *guess_dir(simplex_solver_t *const solver,
+                                  const thvar_t v) {
+  if (!has_any_bound(solver, v)) {
+    return &spx_rat_ZERO;
+  }
+  if (has_lb(solver, v) && !has_ub(solver, v)) {
+    return &spx_rat_ONE;
+  }
+  if (!has_lb(solver, v) && has_ub(solver, v)) {
+    return &spx_rat_NEGONE;
+  }
+  const int lb_sng = q_sgn(get_lb_main(solver, v));
+  const int ub_sgn = q_sgn(get_ub_main(solver, v));
+
+  if (ub_sgn != 0 && lb_sng == 0) {
+    return &spx_rat_ONE;
+  }
+  if (ub_sgn == 0 && lb_sng != 0) {
+    return &spx_rat_NEGONE;
+  }
+
+  return &spx_rat_ZERO;
+}
+#else
+static const spx_rat_t *guess_dir(simplex_solver_t *const, const thvar_t) {
+  return &spx_rat_ZERO;
+}
+#endif
 
 #if USE_MATRIX
 /**
@@ -954,24 +1043,25 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
                              const spx_t *const spx) {
   assert(spx->n_cols > 0);
   void *lp = spx->lp;
-  mpq_t temp_lb, temp_ub;
-  mpq_init_pair(temp_lb, temp_ub);
+  spx_rat_t temp_lb, temp_ub;
+  spx_rat_init_pair(temp_lb, temp_ub);
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
   // 0 is the constant column, which is not a variable
   for (thvar_t v = 1; v < num_vars; v++) {
-    mpq_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
-    mpq_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_ub);
+    spx_lightrat_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
+    spx_lightrat_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
     const int n_cols = SoPlex_getNumColsLpProblemRational(lp);
     spx->col_to_var[n_cols] = v;
     spx->var_to_col[v] = n_cols;
-    SoPlex_addColToLpProblemRational(lp, NULL, NULL, 0, mpq_zeroLpNum, lb, ub);
+    SoPlex_addColToLpProblemRational(lp, NULL, NULL, 0, *guess_dir(solver, v),
+                                     lb, ub);
   }
 
-  mpq_clear_pair(temp_lb, temp_ub);
+  spx_rat_clear_pair(temp_lb, temp_ub);
 }
 
 /**
@@ -992,18 +1082,18 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
   assert(spx->n_rows > 0);
   matrix_t *const mat = &solver->matrix;
 
-  mpq_t rhs;
-  mpq_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
+  spx_rat_t rhs;
+  spx_rat_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
   int col_idxs[SoPlex_getNumColsLpProblemRational(spx->lp)];
-  mpq_init(rhs);
+  spx_rat_init(rhs);
   for (int i = 0; i < SoPlex_getNumColsLpProblemRational(spx->lp); i++) {
-    mpq_init(values[i]);
+    spx_rat_init(values[i]);
   }
 
   // Add rows to the LP problem
   for (uint32_t r = 0; r < mat->nrows; r++) {
     int num_non_zeros = 0;
-    mpq_set(rhs, mpq_zeroLpNum); // Reset the RHS for this row
+    spx_rat_set(rhs, spx_rat_ZERO); // Reset the RHS for this row
     const row_t *const row = matrix_row(mat, r);
     for (uint32_t i = 0; i < row->size; i++) {
       const thvar_t v = row->data[i].c_idx;
@@ -1011,13 +1101,13 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
         continue;
       if (v == const_idx) // Ignore constant coefficients (i.e., RHS)
       {
-        mpq_set_q(rhs, &row->data[i].coeff);
-        mpq_neg(rhs, rhs);
-        assert(!mpq_is_zero(rhs));
+        rat_set_q(rhs, &row->data[i].coeff);
+        spx_rat_negate(rhs);
+        assert(!spx_rat_is_zero(rhs));
         continue;
       }
 
-      mpq_set_q(values[num_non_zeros], &row->data[i].coeff);
+      rat_set_q(values[num_non_zeros], &row->data[i].coeff);
       col_idxs[num_non_zeros++] = spx->var_to_col[v];
     }
 
@@ -1025,8 +1115,8 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
                                      rhs, rhs);
   }
 
-  mpq_clear(rhs);
-  mpq_vector_clear(values, SoPlex_getNumColsLpProblemRational(spx->lp));
+  spx_rat_clear(rhs);
+  rat_vector_clear(values, SoPlex_getNumColsLpProblemRational(spx->lp));
 }
 #else
 /**
@@ -1044,8 +1134,8 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
                              const spx_t *const spx) {
   assert(spx->n_cols > 0);
   void *lp = spx->lp;
-  mpq_t temp_lb, temp_ub;
-  mpq_init_pair(temp_lb, temp_ub);
+  spx_rat_t temp_lb, temp_ub;
+  spx_rat_init_pair(temp_lb, temp_ub);
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
@@ -1053,21 +1143,20 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
   for (thvar_t v = 0; v < num_vars; v++) {
     // Free variables. They come from the SMT input. Encode them as columns.
     if (var_is_valid_column(solver, v)) {
-      mpq_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
-      mpq_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_lb);
+      spx_lightrat_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
+      spx_lightrat_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_lb);
 
       const int n_cols = SoPlex_getNumColsLpProblemRational(lp);
       spx->col_to_var[n_cols] = v;
       spx->var_to_col[v] = n_cols;
-      SoPlex_addColToLpProblemRational(lp, NULL, NULL, 0, mpq_zeroLpNum, lb,
-                                       ub);
+      SoPlex_addColToLpProblemRational(lp, NULL, NULL, 0, spx_rat_ZERO, lb, ub);
     }
 
     // If the variable is not free, it is an auxiliary variable.
     // We will encode those as rows later.
   }
 
-  mpq_clear_pair(temp_lb, temp_ub);
+  spx_rat_clear_pair(temp_lb, temp_ub);
 }
 
 /**
@@ -1086,14 +1175,14 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
 static void add_rows_epsilon(simplex_solver_t *const solver,
                              const spx_t *const spx) {
   assert(spx->n_rows > 0);
-  mpq_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
+  spx_rat_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
   int col_idxs[SoPlex_getNumColsLpProblemRational(spx->lp)];
   for (int i = 0; i < SoPlex_getNumColsLpProblemRational(spx->lp); i++) {
-    mpq_init(values[i]);
+    spx_rat_init(values[i]);
   }
 
   row_data_t rd = {.col_idxs = col_idxs, .values = values};
-  mpq_init_pair(rd.lb, rd.ub);
+  spx_rat_init_pair(rd.lb, rd.ub);
 
   // Add rows to the LP problem
   const int32_t n_vars = (int32_t)solver->vtbl.nvars;
@@ -1104,8 +1193,8 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
     }
 
     // Add row range
-    mpq_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, rd.lb);
-    mpq_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, rd.ub);
+    spx_lightrat_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, rd.lb);
+    spx_lightrat_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, rd.ub);
     const int num_non_zeros = polynomial_to_row(solver, spx, v, &rd);
 
     // Add the new row to the map
@@ -1117,8 +1206,8 @@ static void add_rows_epsilon(simplex_solver_t *const solver,
                                      num_non_zeros, lb, ub);
   }
 
-  mpq_vector_clear(rd.values, SoPlex_getNumColsLpProblemRational(spx->lp));
-  mpq_clear_pair(rd.lb, rd.ub);
+  rat_vector_clear(rd.values, SoPlex_getNumColsLpProblemRational(spx->lp));
+  spx_rat_clear_pair(rd.lb, rd.ub);
 }
 #endif
 
@@ -1179,30 +1268,30 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
   int col_idxs[2];
-  mpq_t values[2];
-  mpq_t rhs;
+  spx_rat_t values[2];
+  spx_rat_t rhs;
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
   const int strict_var_idx = spx->n_cols;
-  mpq_t temp_lb, temp_ub;
-  mpq_init_pair(temp_lb, temp_ub);
+  spx_rat_t temp_lb, temp_ub;
+  spx_rat_init_pair(temp_lb, temp_ub);
 
-  mpq_init(rhs);
-  mpq_init(values[0]);
-  mpq_init(values[1]);
+  spx_rat_init(rhs);
+  spx_rat_init(values[0]);
+  spx_rat_init(values[1]);
 
   for (thvar_t v = 1; v < num_vars; v++) {
     // Obtain the lower and upper bounds for the variable, if any
     // If the variable is free, then the bounds will be -inf and +inf
-    mpq_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
-    mpq_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_ub);
+    spx_lightrat_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
+    spx_lightrat_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
     const int n_cols = SoPlex_getNumColsLpProblemRational(spx->lp);
     spx->col_to_var[n_cols] = v;
     spx->var_to_col[v] = n_cols;
     SoPlex_addColToLpProblemRational(
-        spx->lp, NULL, NULL, 0, mpq_zeroLpNum,
-        !has_strict_lb(solver, v) ? lb : mpq_ninfLpNum,
-        !has_strict_ub(solver, v) ? ub : mpq_infLpNum);
+        spx->lp, NULL, NULL, 0, spx_rat_ZERO,
+        !has_strict_lb(solver, v) ? lb : spx_rat_NINF,
+        !has_strict_ub(solver, v) ? ub : spx_rat_INF);
 
     // Add a strict constraint for each strict bound around a free variable
     if (has_strict_lb(solver, v)) {
@@ -1210,11 +1299,11 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
       col_idxs[0] = spx->var_to_col[v];
       col_idxs[1] = strict_var_idx;
       // Add 1 coeff to the variable and -1 to the strict variable
-      mpq_set(values[0], mpq_oneLpNum);
-      mpq_set(values[1], mpq_negoneLpNum);
+      spx_rat_set(values[0], spx_rat_ONE);
+      spx_rat_set(values[1], spx_rat_NEGONE);
       // Set the sense 'Greater Than'
       // Set the right-hand side to the lower bound of the variable
-      mpq_set_q(rhs, &get_lb(solver, v)->main);
+      rat_set_q(rhs, &get_lb(solver, v)->main);
 
       // Update the mapping
       const int n_rows = SoPlex_getNumRowsLpProblemRational(spx->lp);
@@ -1222,17 +1311,17 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
       spx->var_to_row[v] = n_rows;
 
       SoPlex_addRowToLpProblemRational(spx->lp, values, col_idxs, 2, rhs,
-                                       mpq_infLpNum);
+                                       spx_rat_INF);
     }
     if (has_strict_ub(solver, v)) {
       assert(has_ub(solver, v));
       col_idxs[0] = spx->var_to_col[v];
       col_idxs[1] = strict_var_idx;
       // Add 1 coeff to the variable and 1 to the strict variable
-      mpq_set(values[0], mpq_oneLpNum);
-      mpq_set(values[1], mpq_oneLpNum);
+      spx_rat_set(values[0], spx_rat_ONE);
+      spx_rat_set(values[1], spx_rat_ONE);
       // Set the right-hand side to the lower bound of the variable
-      mpq_set_q(rhs, &get_ub(solver, v)->main);
+      rat_set_q(rhs, &get_ub(solver, v)->main);
 
       // Update the mapping
       const int n_rows = SoPlex_getNumRowsLpProblemRational(spx->lp);
@@ -1240,18 +1329,18 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
       spx->var_to_row[v] = n_rows;
 
       SoPlex_addRowToLpProblemRational(spx->lp, values, col_idxs, 2,
-                                       mpq_ninfLpNum, rhs);
+                                       spx_rat_NINF, rhs);
     }
   }
 
   // At the end, add the strict variable column,
   // which is used to encode the strict bounds
-  SoPlex_addColToLpProblemRational(spx->lp, NULL, NULL, 0, mpq_negoneLpNum,
-                                   mpq_zeroLpNum, mpq_oneLpNum);
-  mpq_clear(rhs);
-  mpq_clear(values[0]);
-  mpq_clear(values[1]);
-  mpq_clear_pair(temp_lb, temp_ub);
+  SoPlex_addColToLpProblemRational(spx->lp, NULL, NULL, 0, spx_rat_NEGONE,
+                                   spx_rat_ZERO, spx_rat_ONE);
+  spx_rat_clear(rhs);
+  spx_rat_clear(values[0]);
+  spx_rat_clear(values[1]);
+  spx_rat_clear_pair(temp_lb, temp_ub);
 }
 
 /**
@@ -1265,18 +1354,18 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
   assert(spx->n_rows > 0);
   matrix_t *const mat = &solver->matrix;
 
-  mpq_t rhs;
-  mpq_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
+  spx_rat_t rhs;
+  spx_rat_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
   int col_idxs[SoPlex_getNumColsLpProblemRational(spx->lp)];
-  mpq_init(rhs);
+  spx_rat_init(rhs);
   for (int i = 0; i < SoPlex_getNumColsLpProblemRational(spx->lp); i++) {
-    mpq_init(values[i]);
+    spx_rat_init(values[i]);
   }
 
   // Add rows to the LP problem
   for (uint32_t r = 0; r < mat->nrows; r++) {
     int num_non_zeros = 0;
-    mpq_set(rhs, mpq_zeroLpNum); // Reset the RHS for this row
+    spx_rat_set(rhs, spx_rat_ZERO); // Reset the RHS for this row
     const row_t *const row = matrix_row(mat, r);
     for (uint32_t i = 0; i < row->size; i++) {
       const thvar_t v = row->data[i].c_idx;
@@ -1284,13 +1373,13 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
         continue;
       if (v == const_idx) // Ignore constant coefficients (i.e., RHS)
       {
-        mpq_set_q(rhs, &row->data[i].coeff);
-        mpq_neg(rhs, rhs);
-        assert(!mpq_is_zero(rhs));
+        rat_set_q(rhs, &row->data[i].coeff);
+        spx_rat_negate(rhs);
+        assert(!spx_rat_is_zero(rhs));
         continue;
       }
 
-      mpq_set_q(values[num_non_zeros], &row->data[i].coeff);
+      rat_set_q(values[num_non_zeros], &row->data[i].coeff);
       col_idxs[num_non_zeros++] = spx->var_to_col[v];
     }
 
@@ -1298,8 +1387,8 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
                                      rhs, rhs);
   }
 
-  mpq_clear(rhs);
-  mpq_vector_clear(values, SoPlex_getNumColsLpProblemRational(spx->lp));
+  spx_rat_clear(rhs);
+  rat_vector_clear(values, SoPlex_getNumColsLpProblemRational(spx->lp));
 }
 
 #else
@@ -1315,23 +1404,23 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
   assert(spx->n_cols > 0);
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
-  mpq_t temp_lb, temp_ub;
+  spx_rat_t temp_lb, temp_ub;
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
-  mpq_init_pair(temp_lb, temp_ub);
+  spx_rat_init_pair(temp_lb, temp_ub);
 
   for (thvar_t v = 0; v < num_vars; v++) {
     // Free variables. They come from the SMT input. Encode them as columns.
     if (var_is_valid_column(solver, v)) {
-      mpq_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
-      mpq_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_ub);
+      spx_lightrat_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
+      spx_lightrat_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
       const int col_idx = SoPlex_getNumColsLpProblemRational(spx->lp);
       spx->col_to_var[col_idx] = v;
       spx->var_to_col[v] = col_idx;
       SoPlex_addColToLpProblemRational(
-          spx->lp, NULL, NULL, 0, mpq_zeroLpNum,
-          !has_strict_lb(solver, v) ? lb : mpq_ninfLpNum,
-          !has_strict_ub(solver, v) ? ub : mpq_infLpNum);
+          spx->lp, NULL, NULL, 0, spx_rat_ZERO,
+          !has_strict_lb(solver, v) ? lb : spx_rat_NINF,
+          !has_strict_ub(solver, v) ? ub : spx_rat_INF);
     }
 
     // If the variable is not free, it is an auxiliary variable.
@@ -1340,9 +1429,9 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
 
   // At the end, add the strict variable column,
   // which is used to encode the strict bounds
-  SoPlex_addColToLpProblemRational(spx->lp, NULL, NULL, 0, mpq_negoneLpNum,
-                                   mpq_zeroLpNum, mpq_oneLpNum);
-  mpq_clear_pair(temp_lb, temp_ub);
+  SoPlex_addColToLpProblemRational(spx->lp, NULL, NULL, 0, spx_rat_NEGONE,
+                                   spx_rat_ZERO, spx_rat_ONE);
+  spx_rat_clear_pair(temp_lb, temp_ub);
 }
 
 /**
@@ -1356,16 +1445,16 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
   assert(spx->n_rows > 0);
 
   const int strict_var_idx = spx->n_cols; // Index of the strict variable column
-  mpq_t rhs;
-  mpq_init(rhs);
-  mpq_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
+  spx_rat_t rhs;
+  spx_rat_init(rhs);
+  spx_rat_t values[SoPlex_getNumColsLpProblemRational(spx->lp)];
   int col_idxs[SoPlex_getNumColsLpProblemRational(spx->lp)];
   for (int i = 0; i < SoPlex_getNumColsLpProblemRational(spx->lp); i++) {
-    mpq_init(values[i]);
+    spx_rat_init(values[i]);
   }
 
   row_data_t rd = {.col_idxs = col_idxs, .values = values};
-  mpq_init_pair(rd.lb, rd.ub);
+  spx_rat_init_pair(rd.lb, rd.ub);
 
   // Add rows to the LP problem
   const int32_t n_vars = (int32_t)solver->vtbl.nvars;
@@ -1385,11 +1474,11 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
         rd.col_idxs[0] = spx->var_to_col[v];
         rd.col_idxs[1] = strict_var_idx;
         // Add 1 coeff to the variable and -1 to the strict variable
-        mpq_set(rd.values[0], mpq_oneLpNum);
-        mpq_set(rd.values[1], mpq_negoneLpNum);
+        spx_rat_set(rd.values[0], spx_rat_ONE);
+        spx_rat_set(rd.values[1], spx_rat_NEGONE);
         // Set the sense 'Greater Than'
         // Set the right-hand side to the lower bound of the variable
-        mpq_set_q(rhs, &get_lb(solver, v)->main);
+        rat_set_q(rhs, &get_lb(solver, v)->main);
 
         // Update the mapping and increment the row index
         const int n_rows = SoPlex_getNumRowsLpProblemRational(spx->lp);
@@ -1397,17 +1486,17 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
         spx->var_to_row[v] = n_rows;
 
         SoPlex_addRowToLpProblemRational(spx->lp, rd.values, rd.col_idxs, 2,
-                                         rhs, mpq_infLpNum);
+                                         rhs, spx_rat_INF);
       }
       if (has_strict_ub(solver, v)) {
         assert(has_ub(solver, v));
         rd.col_idxs[0] = spx->var_to_col[v];
         rd.col_idxs[1] = strict_var_idx;
         // Add 1 coeff to the variable and 1 to the strict variable
-        mpq_set(rd.values[0], mpq_oneLpNum);
-        mpq_set(rd.values[1], mpq_oneLpNum);
+        spx_rat_set(rd.values[0], spx_rat_ONE);
+        spx_rat_set(rd.values[1], spx_rat_ONE);
         // Set the right-hand side to the lower bound of the variable
-        mpq_set_q(rhs, &get_ub(solver, v)->main);
+        rat_set_q(rhs, &get_ub(solver, v)->main);
 
         // Update the mapping and increment the row index
         const int n_rows = SoPlex_getNumRowsLpProblemRational(spx->lp);
@@ -1415,14 +1504,14 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
         spx->var_to_row[v] = n_rows;
 
         SoPlex_addRowToLpProblemRational(spx->lp, rd.values, rd.col_idxs, 2,
-                                         mpq_ninfLpNum, rhs);
+                                         spx_rat_NINF, rhs);
       }
       continue;
     }
 
     // Add row range
-    mpq_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, rd.lb);
-    mpq_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, rd.ub);
+    spx_lightrat_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, rd.lb);
+    spx_lightrat_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, rd.ub);
 
     int num_non_zeros = polynomial_to_row(solver, spx, v, &rd);
 
@@ -1434,7 +1523,7 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
       if (has_lb(solver, v)) {
         if (is_lb_strict) {
           rd.col_idxs[num_non_zeros] = strict_var_idx;
-          mpq_set(rd.values[num_non_zeros], mpq_negoneLpNum);
+          spx_rat_set(rd.values[num_non_zeros], spx_rat_NEGONE);
           num_non_zeros++;
         }
 
@@ -1444,7 +1533,7 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
         spx->var_to_row[v] = n_rows;
 
         SoPlex_addRowToLpProblemRational(spx->lp, rd.values, rd.col_idxs,
-                                         num_non_zeros, lb, mpq_infLpNum);
+                                         num_non_zeros, lb, spx_rat_INF);
       }
 
       if (has_strict_lb(solver, v))
@@ -1453,7 +1542,7 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
       if (has_ub(solver, v)) {
         if (has_strict_ub(solver, v)) {
           rd.col_idxs[num_non_zeros] = strict_var_idx;
-          mpq_set(rd.values[num_non_zeros], mpq_oneLpNum);
+          spx_rat_set(rd.values[num_non_zeros], spx_rat_ONE);
           num_non_zeros++;
         }
 
@@ -1463,7 +1552,7 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
         spx->var_to_row[v] = n_rows;
 
         SoPlex_addRowToLpProblemRational(spx->lp, rd.values, rd.col_idxs,
-                                         num_non_zeros, mpq_ninfLpNum, ub);
+                                         num_non_zeros, spx_rat_NINF, ub);
       }
 
       continue;
@@ -1479,9 +1568,9 @@ static void add_rows_strict(simplex_solver_t *const solver, spx_t *const spx) {
                                      num_non_zeros, lb, ub);
   }
 
-  mpq_vector_clear(rd.values, SoPlex_getNumColsLpProblemRational(spx->lp));
-  mpq_clear(rhs);
-  mpq_clear_pair(rd.lb, rd.ub);
+  rat_vector_clear(rd.values, SoPlex_getNumColsLpProblemRational(spx->lp));
+  spx_rat_clear(rhs);
+  spx_rat_clear_pair(rd.lb, rd.ub);
 }
 #endif
 
@@ -1513,9 +1602,9 @@ static void extract_solution_strict(simplex_solver_t *solver, spx_t *spx,
 
   // TODO: we may skip ensuring that the strict variable is 0 entirely
 #if 1
-  if (spx->x && is_strict_basic && mpq_is_pos(spx->x[strict_col_idx])) {
-    SoPlex_changeVarBoundsRational_mpq(spx->prob, strict_col_idx, mpq_zeroLpNum,
-                                       mpq_zeroLpNum);
+  if (spx->x && is_strict_basic && spx_rat_is_pos(spx->x[strict_col_idx])) {
+    SoPlex_changeVarBoundsRational_mpq(spx->prob, strict_col_idx, spx_rat_ZERO,
+                                       spx_rat_ZERO);
 
     spx->status = SoPlex_optimize(prob);
 
@@ -1559,7 +1648,7 @@ static void extract_solution_strict(simplex_solver_t *solver, spx_t *spx,
   // or it is non-basic and we don't care about its value.
   // If there is no feasible solution, all bets are off.
   assert(sol->status != EXTERNAL_SIMPLEX_FEASIBLE || !is_strict_basic ||
-         mpq_is_zero(spx->x[strict_col_idx]));
+         spx_rat_is_zero(spx->x[strict_col_idx]));
 #endif
 
   for (int col_idx = 0; col_idx < spx->n_cols; col_idx++) {
