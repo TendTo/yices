@@ -736,7 +736,7 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
     // sprintf(buf, "x%d", rat_QSget_colcount(prob));
 #endif
 
-    rat_QSnew_col(prob, *guess_dir(solver, v), lb, ub,
+    rat_QSnew_col(prob, rat_zeroLpNum, lb, ub,
 #if 1 && !defined(NDEBUG)
                   buf
 #else
@@ -1708,7 +1708,8 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
   qsx_solve_lp(solver, &qsx, sol);
   // Only extract a solution if the external solver found a valid one
   // TODO: UNFORTUNATELY, WE DO IT ONLY ON FEASIBLE
-  if (sol->status == EXTERNAL_SIMPLEX_FEASIBLE) {
+  if (sol->status == EXTERNAL_SIMPLEX_FEASIBLE ||
+      sol->status == EXTERNAL_SIMPLEX_INFEASIBLE) {
     if (__smt2_globals.epsilon_mode)
       extract_solution_epsilon(solver, &qsx, sol);
     else

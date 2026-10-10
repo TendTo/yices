@@ -447,7 +447,7 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
     break;
   }
 
-#if 0
+#if 0 && !defined(NDEBUG)
   printf("\n==== Solution ====\n");
   print_external_solution(&solution);
 #endif
@@ -455,7 +455,7 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
   const external_simplex_status_t status = solution.status;
   switch (status) {
   // TODO: UNFORTUNATELY, WE DO IT ONLY ON FEASIBLE
-  // case EXTERNAL_SIMPLEX_INFEASIBLE:
+  case EXTERNAL_SIMPLEX_INFEASIBLE:
   case EXTERNAL_SIMPLEX_FEASIBLE:
     import_external_solution(solver, &solution);
     break;
