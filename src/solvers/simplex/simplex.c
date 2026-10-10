@@ -1042,14 +1042,14 @@ static bool simplex_eliminable_variable(simplex_solver_t *solver, thvar_t x) {
 /*
  * Check whether x < its lower bound or x > its upper bound
  */
-static bool variable_below_lower_bound(simplex_solver_t *solver, thvar_t x) {
+bool variable_below_lower_bound(simplex_solver_t *const solver, const thvar_t x) {
   int32_t k;
 
   k = arith_var_lower_index(&solver->vtbl, x);
   return k >= 0 && xq_gt(solver->bstack.bound + k, arith_var_value(&solver->vtbl, x));
 }
 
-static bool variable_above_upper_bound(simplex_solver_t *solver, thvar_t x) {
+bool variable_above_upper_bound(simplex_solver_t *const solver, const thvar_t x) {
   int32_t k;
 
   k = arith_var_upper_index(&solver->vtbl, x);
@@ -3842,7 +3842,7 @@ static bool possible_entering_var_for_increase(arith_vartable_t *vtbl, thvar_t y
 /*
  * Search for an entering variable to increase x
  */
-static int32_t find_entering_var_for_increase(simplex_solver_t *solver, row_t *row, thvar_t x) {
+int32_t find_entering_var_for_increase(simplex_solver_t *const solver, row_t *const row, const thvar_t x) {
   arith_vartable_t *vtbl;
   uint32_t i, n;
   thvar_t y;
@@ -3925,7 +3925,7 @@ static bool possible_entering_var_for_decrease(arith_vartable_t *vtbl, thvar_t y
 /*
  * Search for an entering variable to decrease x
  */
-static int32_t find_entering_var_for_decrease(simplex_solver_t *solver, row_t *row, thvar_t x) {
+int32_t find_entering_var_for_decrease(simplex_solver_t *const solver, row_t *const row, const thvar_t x) {
   arith_vartable_t *vtbl;
   uint32_t i, n;
   thvar_t y;
@@ -4101,6 +4101,7 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
   uint32_t adjustment_pivots;
   external_simplex_status_t status;
   uint32_t pivots;
+  thvar_t infeasible_var = null_thvar;
 
 #if TRACE
   printf("---> SIMPLEX: CHECK FEASIBILITY\n");
@@ -4149,16 +4150,24 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
 
     if (pivots >= __smt2_globals.pivot_threshold && !invoked_external_solver) {
       invoked_external_solver = true;
-      status = simplex_check_feasibility_external(solver);
+      status = simplex_check_feasibility_external(solver, &infeasible_var);
     }
 
-    x = int_heap_get_min(&solver->infeasible_vars);
+    if (infeasible_var != null_thvar) {
+      x = infeasible_var;
+      infeasible_var = null_thvar;
+    } else {
+      x = int_heap_get_min(&solver->infeasible_vars);
+    }
     if (x < 0) {
       feasible = true;
       break;
     }
 
 #if TRACE
+    printf("---> Simplex: infeasible var: ");
+    print_simplex_var(stdout, solver, x);
+    printf("\n");
     show_heap(stdout, solver);
 #endif
 

@@ -105,7 +105,8 @@ static inline bool var_is_valid_strict_column(simplex_solver_t *const solver,
 }
 
 external_simplex_status_t
-simplex_check_feasibility_external(simplex_solver_t *solver);
+simplex_check_feasibility_external(simplex_solver_t *solver,
+                                   thvar_t *infeasible_var);
 
 // TODO: REMOVE ALL DEBUG PRINTS
 static inline void print_int_vector(const int32_t v[], const int n,
@@ -223,6 +224,7 @@ static inline void print_external_solution(external_solution_t *sol) {
   }
   printf("\nnon-basic vars: %d\n", n);
   printf("}\n");
+  printf("  infeasible_var: %d\n", sol->infeasible_var);
 }
 
 static inline void print_int_heap(const int_heap_t *heap) {

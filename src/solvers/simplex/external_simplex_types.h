@@ -55,6 +55,7 @@ typedef struct {
   uint32_t nvars;
   int_bvset_t b_vars;
   int_bvset_t nb_vars;
+  thvar_t infeasible_var;
 } external_solution_t;
 
 static inline void bound_type_clear(bound_type_t *bound) {

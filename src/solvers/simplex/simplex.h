@@ -587,6 +587,16 @@ static inline uint32_t simplex_num_dioph_recheck_conflicts(simplex_solver_t *sol
 
 
 
+/***********************
+ *  UTILITY FUNCTIONS  *
+ ***********************/
+
+bool variable_below_lower_bound(simplex_solver_t * solver, thvar_t x);
+bool variable_above_upper_bound(simplex_solver_t * solver, thvar_t x);
+int32_t find_entering_var_for_increase(simplex_solver_t *solver, row_t *row, thvar_t x);
+int32_t find_entering_var_for_decrease(simplex_solver_t *solver, row_t *row, thvar_t x);
+
+
 /********************************
  *  EGRAPH INTERFACE FUNCTIONS  *
  *******************************/

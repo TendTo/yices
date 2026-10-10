@@ -12,6 +12,7 @@
 #include "solvers/simplex/external_qsoptex.h"
 #include "solvers/simplex/external_soplex.h"
 #include "solvers/simplex/matrices.h"
+#include "solvers/simplex/simplex.h"
 #include "solvers/simplex/simplex_printer.h"
 #include "solvers/simplex/simplex_types.h"
 #include "solvers/simplex/simplex_utils.h"
@@ -33,6 +34,7 @@ external_solution_t new_external_solution(const uint32_t nvars) {
 
 void external_solution_init(external_solution_t *sol, const uint32_t nvars) {
   sol->status = EXTERNAL_SIMPLEX_ERROR;
+  sol->infeasible_var = null_thvar;
   sol->nvars = nvars;
   sol->x = (xrational_t *)safe_malloc(nvars * sizeof(xrational_t));
   sol->bounds =
@@ -124,6 +126,27 @@ static void sync_infeasible_vars(simplex_solver_t *const solver) {
   }
 }
 
+static void sync_infeasible_vars_non_basic(simplex_solver_t *const solver,
+                                           const thvar_t v) {
+  assert(v > const_idx);
+  assert(matrix_is_nonbasic_var(&solver->matrix, v));
+  // Remove variables that have now been satisfied by the pivot
+  // from the infeasible heap.
+  // Adding infeasible ones is handled by the matrix_pivot method.
+  const column_t *const col = matrix_column(&solver->matrix, v);
+  for (uint32_t i = 0; i < col->size; i++) {
+    const thvar_t b = matrix_basic_var(&solver->matrix, col->data[i].r_idx);
+    assert(b != null_thvar);
+    if (b > const_idx && value_satisfies_bounds(solver, b)) {
+      int_heap_remove(&solver->infeasible_vars, b);
+    }
+  }
+  // Also, ensure that v is not in the infeasible heap,
+  // since it is now non-basic and at a bound
+  assert(value_satisfies_bounds(solver, v));
+  int_heap_remove(&solver->infeasible_vars, v);
+}
+
 static void simplex_clear_bound_flags(simplex_solver_t *solver, thvar_t x) {
   uint8_t t;
 
@@ -173,23 +196,6 @@ static bool alignment_pivot(simplex_solver_t *const solver,
   // make the variable of index best_i the basic variable for r
   matrix_pivot(matrix, r, best_i);
 
-  // Remove variables that have now been satisfied by the pivot
-  // from the infeasible heap.
-  // Adding infeasible ones is handled by the matrix_pivot method.
-  const row_t *const row = matrix_row(matrix, r);
-  for (uint32_t i = 0; i < row->size; i++) {
-    const int32_t x = row->data[i].c_idx;
-    if (x >= 0 && x != const_idx &&
-        int_heap_member(&solver->infeasible_vars, x)) {
-      if (value_satisfies_bounds(solver, x)) {
-        int_heap_remove(&solver->infeasible_vars, x);
-      }
-    }
-  }
-  // Also, ensure that v is not in the infeasible heap,
-  // since it is now non-basic and at a bound
-  int_heap_remove(&solver->infeasible_vars, v);
-
   switch (sol->bounds[v]) {
   case VAR_BOUND_AT_LOWER:
     update_to_lower_bound(solver, v);
@@ -210,6 +216,67 @@ static bool alignment_pivot(simplex_solver_t *const solver,
     return true;
   }
   return false;
+}
+
+static inline bool is_conflict(simplex_solver_t *const solver,
+                               const thvar_t v) {
+  assert(!value_satisfies_bounds(solver, v));
+  assert(matrix_is_basic_var(&solver->matrix, v));
+
+  matrix_t *const matrix = &solver->matrix;
+  const int32_t r = matrix_basic_row(matrix, v);
+  row_t *const row = matrix_row(matrix, r);
+  assert(row);
+
+  if (variable_below_lower_bound(solver, v)) {
+    // find an entering variable that allows x to increase
+    return find_entering_var_for_increase(solver, row, v) < 0;
+  }
+
+  assert(variable_above_upper_bound(solver, v));
+  // find an entering variable that allows x to decrease
+  return find_entering_var_for_decrease(solver, row, v) < 0;
+}
+
+static inline thvar_t check_infeasible(simplex_solver_t *const solver) {
+  int_heap_t *const infeas_vars = &solver->infeasible_vars;
+  if (int_heap_is_empty(infeas_vars))
+    return null_thvar;
+
+  // There is no specific set of variables to check,
+  // so we will check all the infeasible ones
+  for (uint32_t i = 1; i <= infeas_vars->nelems; i++) {
+    const thvar_t v = infeas_vars->heap[i];
+    if (is_conflict(solver, v)) {
+      return v;
+    }
+  }
+
+  return null_thvar;
+}
+
+static inline thvar_t
+check_infeasible_non_basic(simplex_solver_t *const solver,
+                           const column_t *const non_basic_col) {
+  int_heap_t *const infeas_vars = &solver->infeasible_vars;
+  if (int_heap_is_empty(infeas_vars))
+    return null_thvar;
+
+  assert(non_basic_col);
+  // Instead of checking all the infeasible variables,
+  // we will check only the ones in the basic row
+  for (uint32_t i = 0; i < non_basic_col->size; i++) {
+    const int32_t r = non_basic_col->data[i].r_idx;
+    const thvar_t v = matrix_basic_var(&solver->matrix, r);
+    assert(v != null_thvar);
+    assert(matrix_is_basic_var(&solver->matrix, v));
+    if (int_heap_member(infeas_vars, v) && is_conflict(solver, v)) {
+      assert(!value_satisfies_bounds(solver, v));
+      return v;
+    }
+  }
+
+  return null_thvar;
 }
 
 static inline external_import_status_t
@@ -237,6 +304,12 @@ import_external_solution(simplex_solver_t *const solver,
   }
 
   sync_infeasible_vars(solver);
+  if (sol->status == EXTERNAL_SIMPLEX_INFEASIBLE) {
+    sol->infeasible_var = check_infeasible(solver);
+    if (sol->infeasible_var != null_thvar) {
+      return EXTERNAL_IMPORT_INFEASIBLE;
+    }
+  }
 
 #ifndef NDEBUG
   for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
@@ -289,8 +362,16 @@ import_external_solution(simplex_solver_t *const solver,
       if (alignment_pivot(solver, sol, v)) {
         // A pivot has been performed.
         // v is now non-basic and can be removed from the set
-        // TODO: do we need to sync the infeasible vars here?
-        sync_infeasible_vars(solver);
+        assert(matrix_is_nonbasic_var(matrix, v));
+        sync_infeasible_vars_non_basic(solver, v);
+        if (sol->status == EXTERNAL_SIMPLEX_INFEASIBLE) {
+          sol->infeasible_var =
+              check_infeasible_non_basic(solver, matrix_column(matrix, v));
+          if (sol->infeasible_var != null_thvar) {
+            delete_int_bvset(&missing_nb_vars);
+            return EXTERNAL_IMPORT_INFEASIBLE;
+          }
+        }
         int_bvset_remove(&missing_nb_vars, v);
         n_missing_nb_vars--;
         performed_pivot = true;
@@ -413,13 +494,14 @@ static void print_ctx_parameters() {
 #endif
 
 external_simplex_status_t
-simplex_check_feasibility_external(simplex_solver_t *solver) {
+simplex_check_feasibility_external(simplex_solver_t *solver,
+                                   thvar_t *const infeasible_var) {
   if (!solver->tableau_ready)
     return EXTERNAL_SIMPLEX_UNKNOWN;
 
   solver->stats.external_calls++;
 
-#if 1 && !defined(NDEBUG)
+#if 0 && !defined(NDEBUG)
   printf("\n\n*** SIMPLEX START ***\n");
   print_simplex_vars_summary(stdout, solver);
   printf("==== Pivots ====\n");
@@ -463,6 +545,12 @@ simplex_check_feasibility_external(simplex_solver_t *solver) {
     break;
   }
 
+  if (infeasible_var) {
+    *infeasible_var = solution.infeasible_var;
+#if 1 && !defined(NDEBUG)
+    printf("Infeasible variable: %d\n", solution.infeasible_var);
+#endif
+  }
 #if 0 && !defined(NDEBUG)
   printf("\n\n*** SIMPLEX FINISHED ***\n");
   print_simplex_vars_summary(stdout, solver);
