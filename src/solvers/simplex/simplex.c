@@ -4151,6 +4151,12 @@ static bool simplex_check_feasibility(simplex_solver_t *solver) {
     if (pivots >= __smt2_globals.pivot_threshold && !invoked_external_solver) {
       invoked_external_solver = true;
       status = simplex_check_feasibility_external(solver, &infeasible_var);
+      if (status == EXTERNAL_SIMPLEX_FEASIBLE && __smt2_globals.delta >= 0)
+      {
+        // the external solver found a delta-feasible solution
+        feasible = true;
+        break;
+      }
     }
 
     if (infeasible_var != null_thvar) {
@@ -12197,7 +12203,7 @@ static void simplex_model_for_unmarked_vars(simplex_solver_t *solver, byte_t *ma
   uint32_t i, n;
 
   epsilon = &solver->epsilon;
-  assert(q_is_pos(epsilon) && solver->value != NULL);
+  assert((__smt2_globals.delta >= 0 || q_is_pos(epsilon)) && solver->value != NULL);
 
   vtbl = &solver->vtbl;
   n = vtbl->nvars;
@@ -12536,7 +12542,7 @@ static bool good_simplex_model(simplex_solver_t *solver) {
  */
 void simplex_build_model(simplex_solver_t *solver) {
   byte_t *mark;
-  uint32_t i, n;
+  uint32_t n;
 
 #if DEBUG
   check_assignment(solver);
@@ -12561,9 +12567,13 @@ void simplex_build_model(simplex_solver_t *solver) {
     // remove epsilon values that would cause a conflict with the egraph model.
     epsilon_for_egraph(solver);
   }
-  for (i=1; i<n; i++) {
-    if (! tst_bit(mark, i)) {
-      simplex_adjust_epsilon(solver, i);
+  if (__smt2_globals.delta >= 0) {
+    q_clear(&solver->epsilon);
+  } else {
+    for (uint32_t i = 1; i<n; i++) {
+      if (! tst_bit(mark, i)) {
+        simplex_adjust_epsilon(solver, i);
+      }
     }
   }
 
@@ -12576,7 +12586,7 @@ void simplex_build_model(simplex_solver_t *solver) {
 
   delete_bitvector(mark);
 
-  assert(good_simplex_model(solver));
+  assert(__smt2_globals.delta >= 0.0 || good_simplex_model(solver));
 }
 
 

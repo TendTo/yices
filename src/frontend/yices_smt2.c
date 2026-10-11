@@ -535,7 +535,7 @@ static void parse_command_line(int argc, char *argv[]) {
 
       case delta_opt:
         delta = elem.d_value;
-        if (delta <= 0.0) {
+        if (delta < 0.0) {
           fprintf(stderr, "%s: the delta must be positive\n", parser.command_name);
           goto bad_usage;
         }

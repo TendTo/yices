@@ -117,7 +117,9 @@ static inline void print_rat_vector(const rat_t v[], const int n,
   }
   printf("%s: [", name);
   for (int i = 0; i < n; i++) {
-    rat_print(stdout, v[i]);
+    char * str = rat_get_str(v[i]);
+    printf("%s", str);
+    free(str);
     if (i < n - 1) {
       printf(", ");
     }

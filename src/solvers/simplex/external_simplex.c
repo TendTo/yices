@@ -409,6 +409,18 @@ import_external_solution(simplex_solver_t *const solver,
   return EXTERNAL_IMPORT_INFEASIBLE;
 }
 
+static inline void
+override_external_solution(simplex_solver_t *const solver,
+                           const external_solution_t *const sol) {
+  assert(solver);
+  assert(sol->status == EXTERNAL_SIMPLEX_FEASIBLE);
+  assert(__smt2_globals.delta >= 0.0);
+
+  for (thvar_t v = 0; v < solver->vtbl.nvars; v++) {
+    xq_set(arith_var_value(&solver->vtbl, v), sol->x + v);
+  }
+}
+
 bool has_strict_lb(const simplex_solver_t *const solver, const thvar_t v) {
   const int32_t lb_idx = solver->vtbl.lower_index[v];
   return lb_idx > -1 && !xq_is_rational(&solver->bstack.bound[lb_idx]);
@@ -535,6 +547,12 @@ simplex_check_feasibility_external(simplex_solver_t *solver,
 #endif
 
   const external_simplex_status_t status = solution.status;
+  if (status == EXTERNAL_SIMPLEX_FEASIBLE && __smt2_globals.delta >= 0) {
+    override_external_solution(solver, &solution);
+    external_solution_clear(&solution);
+    return EXTERNAL_SIMPLEX_FEASIBLE;
+  }
+
   switch (status) {
   // TODO: UNFORTUNATELY, WE DO IT ONLY ON FEASIBLE
   case EXTERNAL_SIMPLEX_INFEASIBLE:

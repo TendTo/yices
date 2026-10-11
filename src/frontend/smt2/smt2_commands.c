@@ -2402,8 +2402,8 @@ void smt2_set_pivot_threshold(const uint32_t pivot_threshold) {
 }
 
 void smt2_set_delta(const double delta) {
-  if (delta <= 0.0) {
-    print_error("option :delta must be positive");
+  if (delta < 0.0) {
+    print_error("option :delta must be non-negative");
   } else {
     __smt2_globals.delta = delta;
   }

@@ -26,6 +26,7 @@
 #include "solvers/egraph/egraph_printer.h"
 #include "solvers/simplex/simplex_printer.h"
 
+#include "simplex_utils.h"
 
 /*
  * VARIABLE TABLE
@@ -490,6 +491,11 @@ void print_simplex_vars_summary(FILE *f, simplex_solver_t *solver) {
     lb = arith_var_lower_index(&solver->vtbl, i);
     ub = arith_var_upper_index(&solver->vtbl, i);
 
+    if (value_satisfies_bounds(solver, i)) {
+      fputs("   ", f);
+    } else {
+      fputs("!! ", f);
+    }
     if (matrix_is_basic_var(&solver->matrix, i)) {
       fputs(" b ", f);
     } else {
