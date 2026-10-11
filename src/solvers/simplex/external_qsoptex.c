@@ -332,7 +332,7 @@ static void qsx_init_vars(simplex_solver_t *const solver, qsx_t *qsx) {
   qsx->n_cols = 0;
   qsx->n_rows = 0;
 #if USE_MATRIX // Only estimate rows and cols if we are not using the matrix
-  qsx->n_cols = (int)solver->matrix.ncolumns - 1; // Exclude the constant column
+  qsx->n_cols = num_used_vars(solver);
   qsx->n_rows = (int)solver->matrix.nrows +
                 (__smt2_globals.epsilon_mode ? 0 : num_strict_all_vars(solver));
   qsx->n_nz = matrix_get_n_nz(&solver->matrix);
@@ -717,6 +717,9 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
 
   // 0 is the constant column, which is not a variable
   for (thvar_t v = 1; v < solver->vtbl.nvars; v++) {
+    if (!is_used_var(solver, v))
+      continue;
+
     rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
     rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
     assert(rat_is_gmp(lb) || rat_get_den(lb) > 0);
@@ -1089,6 +1092,9 @@ static void add_cols_strict(simplex_solver_t *const solver,
   // variable
   const int32_t num_vars = (int32_t)solver->vtbl.nvars;
   for (thvar_t v = 1; v < num_vars; v++) {
+    if (!is_used_var(solver, v))
+      continue;
+
     rat_ptr lb = rat_get_bound(solver, v, LOWER_BOUND, temp_lb);
     rat_ptr ub = rat_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
@@ -1147,7 +1153,8 @@ static void add_rows_strict(simplex_solver_t *const solver,
   // Add rows to the LP problem
   const int32_t n_vars = (int32_t)solver->vtbl.nvars;
   for (thvar_t v = 1; v < n_vars; v++) {
-    if (!has_strict_lb(solver, v) && !has_strict_ub(solver, v)) {
+    if ((!has_strict_lb(solver, v) && !has_strict_ub(solver, v)) ||
+        !var_in_columns(qsx, v)) {
       continue;
     }
     assert(has_any_bound(solver, v));

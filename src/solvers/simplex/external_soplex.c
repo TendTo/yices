@@ -724,7 +724,7 @@ static void spx_init_vars(simplex_solver_t *const solver, spx_t *spx) {
   spx->n_cols = 0;
   spx->n_rows = 0;
 #if USE_MATRIX // Only estimate rows and cols if we are not using the matrix
-  spx->n_cols = (int)solver->matrix.ncolumns - 1; // Exclude the constant column
+  spx->n_cols = num_used_vars(solver);
   // If we are in strict mode, we need to add an additional row for each strict
   // bound on a variable.
   spx->n_rows = (int)solver->matrix.nrows +
@@ -1048,9 +1048,10 @@ static void add_cols_epsilon(simplex_solver_t *const solver,
 
   // Construct the columns of the LP by assigning upper/lower bounds to each
   // variable
-  const int32_t num_vars = (int32_t)solver->vtbl.nvars;
   // 0 is the constant column, which is not a variable
-  for (thvar_t v = 1; v < num_vars; v++) {
+  for (thvar_t v = 1; v < solver->vtbl.nvars; v++) {
+    if (!is_used_var(solver, v))
+      continue;
     spx_lightrat_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);
     spx_lightrat_ptr ub = mpq_get_bound(solver, v, UPPER_BOUND, temp_ub);
 
@@ -1280,6 +1281,9 @@ static void add_cols_strict(simplex_solver_t *const solver, spx_t *const spx) {
   spx_rat_init(values[1]);
 
   for (thvar_t v = 1; v < num_vars; v++) {
+    if (!is_used_var(solver, v))
+      continue;
+
     // Obtain the lower and upper bounds for the variable, if any
     // If the variable is free, then the bounds will be -inf and +inf
     spx_lightrat_ptr lb = mpq_get_bound(solver, v, LOWER_BOUND, temp_lb);

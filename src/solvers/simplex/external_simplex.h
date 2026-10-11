@@ -53,9 +53,34 @@ rational_t *get_lb_main(simplex_solver_t *solver, thvar_t x);
 rational_t *get_ub_main(simplex_solver_t *solver, thvar_t x);
 uint32_t matrix_get_n_nz(const matrix_t *matrix);
 
+static inline bool is_used_var(const simplex_solver_t *const solver,
+                               const thvar_t v) {
+  const matrix_t *const matrix = &solver->matrix;
+  const column_t *const col = matrix_column(matrix, v);
+  return col && col->nelems > 0;
+}
+
+/**
+ * Get the number of variables that play a role in the tabeau,
+ * i.e., those that appear in at least a row.
+ * @param solver
+ * @return
+ */
+static inline int num_used_vars(const simplex_solver_t *const solver) {
+  int count = 0;
+  // Skipping over the constant variable
+  for (thvar_t v = 1; v < solver->vtbl.nvars; v++) {
+    count += is_used_var(solver, v) ? 1 : 0;
+  }
+  return count;
+}
+
 static inline int num_strict_all_vars(const simplex_solver_t *const solver) {
   int count = 0;
+  // Skipping over the constant variable
   for (thvar_t v = 1; v < solver->vtbl.nvars; v++) {
+    if (!is_used_var(solver, v))
+      continue;
     count += has_strict_lb(solver, v) + has_strict_ub(solver, v);
   }
   return count;
