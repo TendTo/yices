@@ -996,7 +996,7 @@ static void extract_value(simplex_solver_t *const solver, spx_t *const spx,
 
 #pragma region Epsilon mode
 
-#define GUESS_DIR 1
+#define GUESS_DIR 0
 #if GUESS_DIR
 static const spx_rat_t *guess_dir(simplex_solver_t *const solver,
                                   const thvar_t v) {
