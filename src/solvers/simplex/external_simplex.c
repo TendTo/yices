@@ -296,8 +296,6 @@ import_external_solution(simplex_solver_t *const solver,
     // Only update non-basic variables,
     // hoping to get a feasible solution immediately
     if (matrix_is_nonbasic_var(matrix, v) && int_bvset_member(new_nb, v)) {
-      // TODO: should we violate the invariant that non-basic variables are at a
-      // bound?
       update_nb_value(solver, sol, v);
       assert(value_satisfies_bounds(solver, v));
     }
@@ -554,7 +552,6 @@ simplex_check_feasibility_external(simplex_solver_t *solver,
   }
 
   switch (status) {
-  // TODO: UNFORTUNATELY, WE DO IT ONLY ON FEASIBLE
   case EXTERNAL_SIMPLEX_INFEASIBLE:
   case EXTERNAL_SIMPLEX_FEASIBLE:
     import_external_solution(solver, &solution);

@@ -1796,7 +1796,6 @@ void spx_solve(simplex_solver_t *solver, external_solution_t *sol) {
 
   spx_solve_lp(solver, &spx, sol);
   // Only extract a solution if the external solver found a valid one
-  // TODO: UNFORTUNATELY, WE DO IT ONLY ON FEASIBLE
   if (sol->status == EXTERNAL_SIMPLEX_FEASIBLE ||
       sol->status == EXTERNAL_SIMPLEX_INFEASIBLE) {
     if (__smt2_globals.epsilon_mode)

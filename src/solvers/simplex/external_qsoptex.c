@@ -108,7 +108,7 @@ static inline void rat_sub_q(rat_t rat, const rational_t *q) {
 static const bool LOWER_BOUND = true;
 static const bool UPPER_BOUND = false;
 
-// TODO: REMOVE
+#ifndef NDEBUG
 static inline void print_rat_vector(const rat_t v[], const int n,
                                     const char *name) {
   if (v == NULL) {
@@ -126,6 +126,7 @@ static inline void print_rat_vector(const rat_t v[], const int n,
   }
   printf("]\n");
 }
+#endif
 
 static rat_ptr rat_get_bound(const simplex_solver_t *const solver,
                              const thvar_t v, const bool is_lower_bound,
@@ -1323,7 +1324,7 @@ static void add_rows_strict(simplex_solver_t *const solver, qsx_t *const qsx) {
   rat_QSprob prob = qsx->prob;
   int non_zero_per_row[qsx->n_rows];
   int begin_row_idx[qsx->n_rows];
-  const int strict_var_idx = qsx->n_cols; // TODO: n_cols or QSget_n_cols ?
+  const int strict_var_idx = qsx->n_cols;
 
   row_data_t rd = {.col_idxs = safe_malloc(
                        sizeof(int) * rat_QSget_colcount(prob) * qsx->n_rows),
@@ -1716,7 +1717,6 @@ void qsx_solve(simplex_solver_t *solver, external_solution_t *sol) {
 
   qsx_solve_lp(solver, &qsx, sol);
   // Only extract a solution if the external solver found a valid one
-  // TODO: UNFORTUNATELY, WE DO IT ONLY ON FEASIBLE
   if (sol->status == EXTERNAL_SIMPLEX_FEASIBLE ||
       sol->status == EXTERNAL_SIMPLEX_INFEASIBLE) {
     if (__smt2_globals.epsilon_mode)

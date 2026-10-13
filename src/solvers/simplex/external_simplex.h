@@ -133,7 +133,8 @@ external_simplex_status_t
 simplex_check_feasibility_external(simplex_solver_t *solver,
                                    thvar_t *infeasible_var);
 
-// TODO: REMOVE ALL DEBUG PRINTS
+#ifndef NDEBUG
+
 static inline void print_int_vector(const int32_t v[], const int n,
                                     const char *name) {
   if (v == NULL) {
@@ -265,5 +266,6 @@ static inline void print_int_heap(const int_heap_t *heap) {
   }
   printf("]\n");
 }
+#endif
 
 #endif
