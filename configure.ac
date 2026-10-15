@@ -929,7 +929,7 @@ else
 fi
 if test $use_soplex = yes ; then
     AC_MSG_NOTICE([Enabling support for SoPlex])
-    LIBS="$LIBS -lz -lbz2 -lm -lsoplex"
+    LIBS="$LIBS -lz -lbz2 -lsoplex -lmpfr -lstdc++ -lm"
 else
     AC_MSG_NOTICE([Disabling support for SoPlex])
 fi
