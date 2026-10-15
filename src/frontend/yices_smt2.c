@@ -1248,6 +1248,7 @@ int main(int argc, char *argv[]) {
   }
   if (delta != -1.0) {
     smt2_set_delta(delta);
+    is_epsilon_mode = true; // Delta mode implies epsilon mode
   }
   if (is_epsilon_mode) {
     smt2_set_epsilon_mode(true);
